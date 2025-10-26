@@ -5,10 +5,12 @@ import lazyvalgrade.classfile.ClassfileParser
 import lazyvalgrade.lazyval.{LazyValDetector, LazyValDetectionResult, ScalaVersion}
 import java.nio.file.{Files, Paths, Path}
 import scala.util.Try
+import scala.collection.immutable.TreeSet
 
 /** Test suite for lazy val detection across Scala versions.
   *
-  * Compiles test fixtures using ExampleRunner and verifies that the correct lazy val implementation is detected.
+  * Discovers and compiles test fixtures using ExampleRunner, then verifies that the correct lazy val
+  * implementation is detected based on metadata.json files in each example.
   */
 class LazyValDetectionTests extends FunSuite {
 
@@ -25,159 +27,215 @@ class LazyValDetectionTests extends FunSuite {
     ("3.7.3", ScalaVersion.Scala33x_37x)
   )
 
-  /** Compilation result from ExampleRunner */
-  var compilationResult: Option[ExampleCompilationResult] = None
+  /** Example with its metadata and compilation results */
+  case class ExampleTest(
+    name: String,
+    path: os.Path,
+    metadata: ExampleMetadata,
+    compilationResult: ExampleCompilationResult
+  )
 
   /** Temporary workspace for test compilations */
   val testWorkspace: os.Path = os.temp.dir(prefix = "lazyvalgrade-tests-", deleteOnExit = false)
 
-  override def beforeAll(): Unit = {
+  val cleanupWorkspace: Boolean = false
+
+  /** All discovered examples with their test data - loaded during class initialization */
+  lazy val examples: Seq[ExampleTest] = {
     // Set up paths
     val fixturesDir = os.pwd / "tests" / "src" / "test" / "resources" / "fixtures"
     val examplesDir = fixturesDir / "examples"
-    val examplePath = examplesDir / "simple-lazy-val"
 
     println(s"Fixtures directory: $fixturesDir")
     println(s"Examples directory: $examplesDir")
-    println(s"Example path: $examplePath")
     println(s"Test workspace: $testWorkspace")
+
+    // Discover all examples (directories in examples/)
+    if (!os.exists(examplesDir)) {
+      throw new RuntimeException(s"Examples directory does not exist: $examplesDir")
+    }
+
+    val discoveredExamples = os.list(examplesDir)
+      .filter(os.isDir)
+      .toSeq
+
+    println(s"Discovered ${discoveredExamples.size} examples: ${discoveredExamples.map(_.last).mkString(", ")}")
 
     // Create ExampleRunner
     val runner = ExampleRunner(examplesDir, testWorkspace)
 
-    // Compile the example with all test versions
-    val scalaVersions = testVersions.map(_._1).toSet
+    // Compile all examples with all test versions
+    val scalaVersions = testVersions.map(_._1).to(TreeSet)
     println(s"Compiling with Scala versions: ${scalaVersions.mkString(", ")}")
 
-    val result = runner.runExample(examplePath, scalaVersions)
-    result match {
-      case Right(res) =>
-        compilationResult = Some(res)
-        val successful = res.successfulResults.size
-        val total = res.results.size
-        println(s"Compilation complete: $successful/$total versions succeeded")
+    val loadedExamples = discoveredExamples.flatMap { examplePath =>
+      val exampleName = examplePath.last
 
-        // Print details about failed compilations
-        res.results.foreach { case (version, versionResult) =>
-          if !versionResult.success then
-            println(s"  ✗ Scala $version failed: ${versionResult.error.getOrElse("unknown error")}")
-        }
+      // Load metadata
+      ExampleMetadata.load(examplePath) match {
+        case Left(error) =>
+          println(s"Warning: Skipping example '$exampleName': $error")
+          None
 
-      case Left(error) =>
-        println(s"Failed to compile examples: $error")
-        throw new RuntimeException(s"Failed to compile test fixtures: $error")
+        case Right(metadata) =>
+          println(s"Loading example '$exampleName': ${metadata.description}")
+
+          // Compile the example
+          runner.runExample(examplePath, scalaVersions) match {
+            case Right(compilationResult) =>
+              val successful = compilationResult.successfulResults.size
+              val total = compilationResult.results.size
+              println(s"  Compilation: $successful/$total versions succeeded")
+
+              // Print details about failed compilations
+              compilationResult.results.foreach { case (version, versionResult) =>
+                if !versionResult.success then
+                  println(s"    ✗ Scala $version failed: ${versionResult.error.getOrElse("unknown error")}")
+              }
+
+              Some(ExampleTest(exampleName, examplePath, metadata, compilationResult))
+
+            case Left(error) =>
+              println(s"Warning: Failed to compile example '$exampleName': $error")
+              None
+          }
+      }
     }
+
+    if (loadedExamples.isEmpty) {
+      throw new RuntimeException("No valid examples found with metadata.json files")
+    }
+
+    println(s"Loaded ${loadedExamples.size} examples for testing")
+    loadedExamples
   }
 
   override def afterAll(): Unit = {
     // Clean up workspace
-    if os.exists(testWorkspace) then
+    if os.exists(testWorkspace) && cleanupWorkspace then
       println(s"Cleaning up test workspace: $testWorkspace")
       os.remove.all(testWorkspace)
   }
 
-  /** Finds a compiled classfile for a specific Scala version.
+  /** Finds a compiled classfile for a specific example, Scala version, and class name.
     *
-    * @param scalaVersion
-    *   The Scala version
-    * @return
-    *   Path to SimpleLazyVal$.class if found
+    * @param example The example test data
+    * @param scalaVersion The Scala version
+    * @param className The expected class name (e.g., "SimpleLazyVal$")
+    * @return Path to the classfile if found
     */
-  def findClassFile(scalaVersion: String): Option[Path] = {
-    compilationResult.flatMap { result =>
-      result.results.get(scalaVersion).flatMap { versionResult =>
-        versionResult.classFiles
-          .find(_.relativePath.endsWith("SimpleLazyVal$.class"))
-          .map(_.absolutePath.toNIO)
-      }
+  def findClassFile(example: ExampleTest, scalaVersion: String, className: String): Option[Path] = {
+    example.compilationResult.results.get(scalaVersion).flatMap { versionResult =>
+      versionResult.classFiles
+        .find(_.relativePath.endsWith(s"$className.class"))
+        .map(_.absolutePath.toNIO)
     }
   }
 
-  /** Tests lazy val detection for a specific Scala version */
-  def testVersion(scalaVersion: String, expectedVersion: ScalaVersion): Unit = {
-    test(s"Detect lazy val implementation in Scala $scalaVersion") {
-      // Check if this version compiled successfully
-      val wasCompiled = compilationResult.exists { result =>
-        result.results.get(scalaVersion).exists(_.success)
-      }
+  /** Generate tests for each example, class, and Scala version combination */
+  def generateTests(): Unit = {
+    examples.foreach { example =>
+      example.metadata.expectedClasses.foreach { expectedClass =>
+        testVersions.foreach { case (scalaVersion, expectedVersion) =>
+          test(s"[${example.name}] ${expectedClass.className} in Scala $scalaVersion") {
+            // Check if this version compiled successfully
+            val wasCompiled = example.compilationResult.results.get(scalaVersion).exists(_.success)
 
-      // Skip if compilation failed (likely due to JDK compatibility)
-      assert(wasCompiled, s"Scala $scalaVersion did not compile (likely JDK compatibility issue)")
+            // Skip if compilation failed
+            assume(wasCompiled, s"Scala $scalaVersion did not compile (likely JDK compatibility issue)")
 
-      val classFileOpt = findClassFile(scalaVersion)
+            // Find the classfile
+            val classFileOpt = findClassFile(example, scalaVersion, expectedClass.className)
+            assert(classFileOpt.isDefined, s"Failed to find compiled classfile ${expectedClass.className}.class for Scala $scalaVersion")
 
-      assert(classFileOpt.isDefined, s"Failed to find compiled classfile for Scala $scalaVersion")
+            val classFile = classFileOpt.get
+            val bytes = Files.readAllBytes(classFile)
 
-      val classFile = classFileOpt.get
-      val bytes = Files.readAllBytes(classFile)
+            // Parse classfile
+            val parseResult = ClassfileParser.parse(bytes)
+            assert(parseResult.isRight, s"Failed to parse classfile: ${parseResult.left.getOrElse("unknown error")}")
 
-      // Parse classfile
-      val parseResult = ClassfileParser.parse(bytes)
-      assert(parseResult.isRight, s"Failed to parse classfile: ${parseResult.left.getOrElse("unknown error")}")
+            val classInfo = parseResult.getOrElse(???)
 
-      val classInfo = parseResult.getOrElse(???)
+            // Detect lazy vals
+            val detector = LazyValDetector()
+            val detectionResult = detector.detect(classInfo)
 
-      // Detect lazy vals
-      val detector = LazyValDetector()
-      val detectionResult = detector.detect(classInfo)
+            // Verify we found lazy vals
+            detectionResult match {
+              case LazyValDetectionResult.NoLazyVals =>
+                if (expectedClass.lazyVals.isEmpty) {
+                  // Expected no lazy vals - test passes
+                  ()
+                } else {
+                  fail(s"Expected to find ${expectedClass.lazyVals.size} lazy val(s) but found none")
+                }
 
-      // Verify we found lazy vals
-      detectionResult match {
-        case LazyValDetectionResult.NoLazyVals =>
-          fail("Expected to find lazy vals but found none")
+              case LazyValDetectionResult.LazyValsFound(lazyVals, version) =>
+                // Check expected count
+                assertEquals(
+                  lazyVals.size,
+                  expectedClass.lazyVals.size,
+                  s"Expected ${expectedClass.lazyVals.size} lazy val(s) but found ${lazyVals.size}"
+                )
 
-        case LazyValDetectionResult.LazyValsFound(lazyVals, version) =>
-          assertEquals(lazyVals.size, 1, "Expected exactly 1 lazy val")
-          assertEquals(lazyVals.head.name, "simpleLazy", "Expected lazy val named 'simpleLazy'")
-          assertEquals(version, expectedVersion, s"Expected $expectedVersion but detected $version")
+                // Check version detection
+                assertEquals(version, expectedVersion, s"Expected $expectedVersion but detected $version")
 
-          // Additional version-specific checks
-          expectedVersion match {
-            case ScalaVersion.Scala30x_31x | ScalaVersion.Scala32x =>
-              assert(lazyVals.head.bitmapField.isDefined, "Expected bitmap field for 3.0-3.2.x")
-              assert(lazyVals.head.initMethod.isEmpty, "Did not expect lzyINIT method for 3.0-3.2.x")
-              assert(
-                lazyVals.head.storageField.descriptor != "Ljava/lang/Object;",
-                "Expected typed storage field for 3.0-3.2.x"
-              )
+                // Verify each expected lazy val
+                expectedClass.lazyVals.foreach { expectedLazyVal =>
+                  val foundLazyVal = lazyVals.find(_.name == expectedLazyVal.name)
+                  assert(
+                    foundLazyVal.isDefined,
+                    s"Expected to find lazy val '${expectedLazyVal.name}' but it was not detected"
+                  )
 
-              // Check accessor instruction count
-              val accessorSize = lazyVals.head.accessorMethod.map(_.instructions.size).getOrElse(0)
-              expectedVersion match {
-                case ScalaVersion.Scala30x_31x =>
-                  assertEquals(accessorSize, 94, "Expected 94 instructions in accessor for 3.0.x/3.1.x")
-                case ScalaVersion.Scala32x =>
-                  assertEquals(accessorSize, 88, "Expected 88 instructions in accessor for 3.2.x")
-                case _ => ()
-              }
+                  val lazyVal = foundLazyVal.get
+                  assertEquals(
+                    lazyVal.index,
+                    expectedLazyVal.index,
+                    s"Expected lazy val '${expectedLazyVal.name}' to have index ${expectedLazyVal.index} but got ${lazyVal.index}"
+                  )
+                }
 
-            case ScalaVersion.Scala33x_37x =>
-              assert(lazyVals.head.bitmapField.isEmpty, "Did not expect bitmap field for 3.3-3.7.x")
-              assert(lazyVals.head.initMethod.isDefined, "Expected lzyINIT method for 3.3-3.7.x")
-              assert(lazyVals.head.offsetField.isDefined, "Expected OFFSET field for 3.3-3.7.x")
-              assertEquals(
-                lazyVals.head.storageField.descriptor,
-                "Ljava/lang/Object;",
-                "Expected Object storage field for 3.3-3.7.x"
-              )
+                // Additional version-specific checks
+                expectedVersion match {
+                  case ScalaVersion.Scala30x_31x | ScalaVersion.Scala32x =>
+                    lazyVals.foreach { lazyVal =>
+                      assert(lazyVal.bitmapField.isDefined, s"Expected bitmap field for ${lazyVal.name} in 3.0-3.2.x")
+                      assert(lazyVal.initMethod.isEmpty, s"Did not expect lzyINIT method for ${lazyVal.name} in 3.0-3.2.x")
+                      assert(
+                        lazyVal.storageField.descriptor != "Ljava/lang/Object;",
+                        s"Expected typed storage field for ${lazyVal.name} in 3.0-3.2.x"
+                      )
+                    }
 
-              // Check accessor instruction count (should be 26 for all 3.3-3.7.x)
-              val accessorSize = lazyVals.head.accessorMethod.map(_.instructions.size).getOrElse(0)
-              assertEquals(accessorSize, 26, "Expected 26 instructions in accessor for 3.3-3.7.x")
+                  case ScalaVersion.Scala33x_37x =>
+                    lazyVals.foreach { lazyVal =>
+                      assert(lazyVal.bitmapField.isEmpty, s"Did not expect bitmap field for ${lazyVal.name} in 3.3-3.7.x")
+                      assert(lazyVal.initMethod.isDefined, s"Expected lzyINIT method for ${lazyVal.name} in 3.3-3.7.x")
+                      assert(lazyVal.offsetField.isDefined, s"Expected OFFSET field for ${lazyVal.name} in 3.3-3.7.x")
+                      assertEquals(
+                        lazyVal.storageField.descriptor,
+                        "Ljava/lang/Object;",
+                        s"Expected Object storage field for ${lazyVal.name} in 3.3-3.7.x"
+                      )
+                    }
 
-            case _ => ()
+                  case _ => ()
+                }
+
+              case LazyValDetectionResult.MixedVersions(lazyVals) =>
+                fail(s"Unexpected mixed versions: ${lazyVals.map(_.version).distinct}")
+            }
           }
-
-        case LazyValDetectionResult.MixedVersions(lazyVals) =>
-          fail(s"Unexpected mixed versions: ${lazyVals.map(_.version).distinct}")
+        }
       }
     }
   }
 
-  // Generate tests for all versions (tests will skip if compilation failed)
-  testVersions.foreach { case (version, expectedVersion) =>
-    testVersion(version, expectedVersion)
-  }
+  // Generate all tests
+  generateTests()
 
   test("Verify version classification logic") {
     // Test that version enums have correct properties

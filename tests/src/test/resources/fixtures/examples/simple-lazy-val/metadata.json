@@ -1,0 +1,14 @@
+{
+  "description": "Simple lazy val example with a single lazy val in an object",
+  "expectedClasses": [
+    {
+      "className": "SimpleLazyVal$",
+      "lazyVals": [
+        {
+          "name": "simpleLazy",
+          "index": 1
+        }
+      ]
+    }
+  ]
+}

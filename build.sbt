@@ -36,7 +36,9 @@ lazy val tests = project
     libraryDependencies ++= Seq(
       "org.scalameta" %% "munit" % "1.0.0" % Test,
       "com.outr" %% "scribe" % "3.15.0",
-      "com.lihaoyi" %% "os-lib" % "0.11.3"
+      "com.lihaoyi" %% "os-lib" % "0.11.3",
+      "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-core" % "2.32.0",
+      "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-macros" % "2.32.0" % Provided
     ),
     testFrameworks += new TestFramework("munit.Framework")
   )
