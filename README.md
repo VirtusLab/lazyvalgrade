@@ -32,13 +32,15 @@ Recompiling the entire ecosystem is impractical and time-consuming. This is wher
 
 ### Implementation Differences
 
-**Scala 3.0-3.2.x**: Had one implementation of lazy vals using `sun.misc.Unsafe`
+**Scala 3.0.x-3.1.x**: Bitmap-based inline implementation using `sun.misc.Unsafe` (94 instructions per accessor)
 
-**Scala 3.3-3.7.x**: Changed to a different implementation, still using `sun.misc.Unsafe`
+**Scala 3.2.x**: Minor refinement of 3.0.x/3.1.x bitmap-based implementation (88 instructions, different reflection API)
 
-**Scala 3.8+**: New implementation without `sun.misc.Unsafe`
+**Scala 3.3.x-3.7.x**: Complete redesign to object-based implementation with separate lzyINIT methods, still using `sun.misc.Unsafe` (26 instruction accessor)
 
-LazyValgrade must handle transformations from both older implementation variants to the 3.8+ implementation.
+**Scala 3.8+**: New VarHandle-based implementation without `sun.misc.Unsafe`
+
+LazyValgrade must handle transformations from three distinct implementation families to the 3.8+ implementation.
 
 ## The Solution
 

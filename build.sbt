@@ -27,7 +27,22 @@ lazy val testops = project
   )
   .dependsOn(core)
 
+lazy val tests = project
+  .in(file("tests"))
+  .settings(
+    name := "lazyvalgrade-tests",
+    version := "0.1.0-SNAPSHOT",
+    scalaVersion := "3.7.3",
+    libraryDependencies ++= Seq(
+      "org.scalameta" %% "munit" % "1.0.0" % Test,
+      "com.outr" %% "scribe" % "3.15.0",
+      "com.lihaoyi" %% "os-lib" % "0.11.3"
+    ),
+    testFrameworks += new TestFramework("munit.Framework")
+  )
+  .dependsOn(core, testops)
+
 lazy val root = project
   .in(file("."))
   .settings(name := "lazyvalgrade")
-  .aggregate(core, testops)
+  .aggregate(core, testops, tests)
