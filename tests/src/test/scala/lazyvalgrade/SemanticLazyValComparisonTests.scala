@@ -60,10 +60,7 @@ class SemanticLazyValComparisonTests extends FunSuite {
     println(s"Semantic comparison test workspace: $testWorkspace")
 
     // Discover examples
-    val discoveredExamples = os
-      .list(examplesDir)
-      .filter(os.isDir)
-      .toSeq
+    val discoveredExamples = os.list(examplesDir).filter(os.isDir).toSeq
 
     // Collect all versions needed
     val allVersions = (versionPairs.flatMap { case (v1, v2, _) => Seq(v1, v2) }).distinct.to(TreeSet)
@@ -77,8 +74,7 @@ class SemanticLazyValComparisonTests extends FunSuite {
 
       ExampleMetadata.load(examplePath) match {
         case Left(error) =>
-          println(s"Skipping example '$exampleName': $error")
-          None
+          throw new RuntimeException(s"Failed to load metadata for example '$exampleName': $error")
 
         case Right(metadata) =>
           runner.compileExample(examplePath, allVersions) match {
@@ -89,8 +85,7 @@ class SemanticLazyValComparisonTests extends FunSuite {
               Some(ExampleTest(exampleName, examplePath, metadata, compilationResult))
 
             case Left(error) =>
-              println(s"Failed to compile example '$exampleName': $error")
-              None
+              throw new RuntimeException(s"Failed to compile example '$exampleName': $error")
           }
       }
     }
@@ -269,30 +264,40 @@ class SemanticLazyValComparisonTests extends FunSuite {
     }
     val expectedClass = example.metadata.expectedClasses.find(_.lazyVals.nonEmpty).get
 
-    // Test bitmap-based (3.2) vs object-based (3.3)
+    // Test 2 kinds of bitmap-based (3.1, 3.2) vs object-based (3.3)
+    val classFile31Opt = findClassFile(example, "3.1.3", expectedClass.className)
     val classFile32Opt = findClassFile(example, "3.2.2", expectedClass.className)
     val classFile33Opt = findClassFile(example, "3.3.0", expectedClass.className)
 
-    assert(classFile32Opt.isDefined && classFile33Opt.isDefined, "Required classfiles not available")
+    assert(
+      classFile31Opt.isDefined && classFile32Opt.isDefined && classFile33Opt.isDefined,
+      "Required classfiles not available"
+    )
 
+    val bytes31 = Files.readAllBytes(classFile31Opt.get)
     val bytes32 = Files.readAllBytes(classFile32Opt.get)
     val bytes33 = Files.readAllBytes(classFile33Opt.get)
 
+    val class31 = ClassfileParser.parse(bytes31).toOption.get
     val class32 = ClassfileParser.parse(bytes32).toOption.get
     val class33 = ClassfileParser.parse(bytes33).toOption.get
 
-    val result = SemanticLazyValComparator.compare(class32, class33)
+    val result3132 = SemanticLazyValComparator.compare(class31, class32)
+    val result3233 = SemanticLazyValComparator.compare(class32, class33)
+    val result3133 = SemanticLazyValComparator.compare(class31, class33)
 
-    assert(!result.areIdentical, "3.2 vs 3.3 should be different")
+    assert(!result3132.areIdentical, "3.1 vs 3.2 should be different")
+    assert(!result3233.areIdentical, "3.2 vs 3.3 should be different")
+    assert(!result3133.areIdentical, "3.1 vs 3.3 should be different")
 
-    result match {
+    List(result3132, result3233, result3133).foreach {
       case SemanticLazyValComparisonResult.Different(reasons) =>
         // Should have at least one reason mentioning the difference
         assert(reasons.nonEmpty, "Should have reasons for the difference")
         println(s"  Detected differences: ${reasons.mkString(", ")}")
 
       case _ =>
-        fail(s"Expected Different result, got: $result")
+        fail(s"Expected Different result, got: $result3233")
     }
   }
 }
