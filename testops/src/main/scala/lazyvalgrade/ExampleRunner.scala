@@ -2,6 +2,9 @@ package lazyvalgrade
 
 import java.security.MessageDigest
 import scala.util.{Try, Success, Failure}
+import scala.concurrent.{Future, ExecutionContext, blocking, Await, duration}
+import ExecutionContext.Implicits.global
+import duration._
 
 /** Runs Scala compilation examples across multiple versions
   *
@@ -69,7 +72,8 @@ class ExampleRunner(
     info(s"Compiling with Scala $scalaVersion...")
 
     // Run scala-cli compile
-    val result = os.proc("scala-cli", "compile", "-S", scalaVersion, targetDir.toString)
+    val result = os
+      .proc("scala-cli", "compile", "-S", scalaVersion, targetDir.toString)
       .call(cwd = targetDir)
 
     val output = result.out.text()
@@ -125,8 +129,7 @@ class ExampleRunner(
         val normalizedPath = fullPath.split("/").toSeq match {
           case parts if parts.contains("classes") =>
             val classesIdx = parts.indexOf("classes")
-            if classesIdx + 2 < parts.size then
-              Some(parts.drop(classesIdx + 2).mkString("/"))
+            if classesIdx + 2 < parts.size then Some(parts.drop(classesIdx + 2).mkString("/"))
             else None
           case _ => None
         }
@@ -152,7 +155,7 @@ class ExampleRunner(
     * @return
     *   Either error message or compilation results
     */
-  def runExample(
+  def compileExample(
       examplePath: os.Path,
       scalaVersions: Set[String]
   ): Either[String, ExampleCompilationResult] = {
@@ -172,24 +175,30 @@ class ExampleRunner(
       val exampleWorkspace = workspaceRoot / exampleName
       os.makeDir.all(exampleWorkspace)
 
-      val results = scalaVersions.toSeq.map { version =>
-        val result = compileWithScalaCli(resolvedExample, version, exampleWorkspace)
-        result match {
-          case Success(r) if r.success =>
-            info(
-              s"  ✓ Scala $version compiled successfully (${r.classFiles.size} class files)"
-            )
-          case Success(r) =>
-            warn(s"  ✗ Scala $version compilation failed")
-          case Failure(e) =>
-            error(s"  ✗ Scala $version failed with exception: ${e.getMessage}")
-        }
-        version -> result.get
-      }.toMap
+      val results = Future
+        .sequence(scalaVersions.toSeq.map { version =>
+          Future {
+            blocking {
+              val result = compileWithScalaCli(resolvedExample, version, exampleWorkspace)
+              result match {
+                case Success(r) if r.success =>
+                  info(
+                    s"  ✓ Scala $version compiled successfully (${r.classFiles.size} class files)"
+                  )
+                case Success(r) =>
+                  warn(s"  ✗ Scala $version compilation failed")
+                case Failure(e) =>
+                  error(s"  ✗ Scala $version failed with exception: ${e.getMessage}")
+              }
+              version -> result.get
+            }
+          }
+        })
+        .map(_.toMap)
 
       ExampleCompilationResult(
         exampleName = exampleName,
-        results = results
+        results = Await.result(results, 3.minutes) // TODO: Make this configurable
       )
     }
   }
@@ -203,11 +212,11 @@ class ExampleRunner(
     * @return
     *   Sequence of results or errors
     */
-  def runExamples(
+  def compileExamples(
       examplePaths: Seq[os.Path],
       scalaVersions: Set[String]
   ): Seq[Either[String, ExampleCompilationResult]] =
-    examplePaths.map(runExample(_, scalaVersions))
+    examplePaths.map(compileExample(_, scalaVersions))
 
   /** Discovers all example directories in the examples root
     *

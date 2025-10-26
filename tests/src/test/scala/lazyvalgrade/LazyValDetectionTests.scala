@@ -9,8 +9,8 @@ import scala.collection.immutable.TreeSet
 
 /** Test suite for lazy val detection across Scala versions.
   *
-  * Discovers and compiles test fixtures using ExampleRunner, then verifies that the correct lazy val
-  * implementation is detected based on metadata.json files in each example.
+  * Discovers and compiles test fixtures using ExampleRunner, then verifies that the correct lazy val implementation is
+  * detected based on metadata.json files in each example.
   */
 class LazyValDetectionTests extends FunSuite {
 
@@ -24,15 +24,16 @@ class LazyValDetectionTests extends FunSuite {
     ("3.4.3", ScalaVersion.Scala33x_37x),
     ("3.5.2", ScalaVersion.Scala33x_37x),
     ("3.6.4", ScalaVersion.Scala33x_37x),
-    ("3.7.3", ScalaVersion.Scala33x_37x)
+    ("3.7.3", ScalaVersion.Scala33x_37x),
+    ("3.8.0-RC1-bin-20251026-5c51b7b-NIGHTLY", ScalaVersion.Scala38Plus)
   )
 
   /** Example with its metadata and compilation results */
   case class ExampleTest(
-    name: String,
-    path: os.Path,
-    metadata: ExampleMetadata,
-    compilationResult: ExampleCompilationResult
+      name: String,
+      path: os.Path,
+      metadata: ExampleMetadata,
+      compilationResult: ExampleCompilationResult
   )
 
   /** Temporary workspace for test compilations */
@@ -55,7 +56,8 @@ class LazyValDetectionTests extends FunSuite {
       throw new RuntimeException(s"Examples directory does not exist: $examplesDir")
     }
 
-    val discoveredExamples = os.list(examplesDir)
+    val discoveredExamples = os
+      .list(examplesDir)
       .filter(os.isDir)
       .toSeq
 
@@ -81,7 +83,7 @@ class LazyValDetectionTests extends FunSuite {
           println(s"Loading example '$exampleName': ${metadata.description}")
 
           // Compile the example
-          runner.runExample(examplePath, scalaVersions) match {
+          runner.compileExample(examplePath, scalaVersions) match {
             case Right(compilationResult) =>
               val successful = compilationResult.successfulResults.size
               val total = compilationResult.results.size
@@ -119,10 +121,14 @@ class LazyValDetectionTests extends FunSuite {
 
   /** Finds a compiled classfile for a specific example, Scala version, and class name.
     *
-    * @param example The example test data
-    * @param scalaVersion The Scala version
-    * @param className The expected class name (e.g., "SimpleLazyVal$")
-    * @return Path to the classfile if found
+    * @param example
+    *   The example test data
+    * @param scalaVersion
+    *   The Scala version
+    * @param className
+    *   The expected class name (e.g., "SimpleLazyVal$")
+    * @return
+    *   Path to the classfile if found
     */
   def findClassFile(example: ExampleTest, scalaVersion: String, className: String): Option[Path] = {
     example.compilationResult.results.get(scalaVersion).flatMap { versionResult =>
@@ -141,12 +147,15 @@ class LazyValDetectionTests extends FunSuite {
             // Check if this version compiled successfully
             val wasCompiled = example.compilationResult.results.get(scalaVersion).exists(_.success)
 
-            // Skip if compilation failed
-            assume(wasCompiled, s"Scala $scalaVersion did not compile (likely JDK compatibility issue)")
+            // Fail if compilation failed
+            assert(wasCompiled, s"Scala $scalaVersion did not compile (likely JDK compatibility issue)")
 
             // Find the classfile
             val classFileOpt = findClassFile(example, scalaVersion, expectedClass.className)
-            assert(classFileOpt.isDefined, s"Failed to find compiled classfile ${expectedClass.className}.class for Scala $scalaVersion")
+            assert(
+              classFileOpt.isDefined,
+              s"Failed to find compiled classfile ${expectedClass.className}.class for Scala $scalaVersion"
+            )
 
             val classFile = classFileOpt.get
             val bytes = Files.readAllBytes(classFile)
@@ -203,7 +212,10 @@ class LazyValDetectionTests extends FunSuite {
                   case ScalaVersion.Scala30x_31x | ScalaVersion.Scala32x =>
                     lazyVals.foreach { lazyVal =>
                       assert(lazyVal.bitmapField.isDefined, s"Expected bitmap field for ${lazyVal.name} in 3.0-3.2.x")
-                      assert(lazyVal.initMethod.isEmpty, s"Did not expect lzyINIT method for ${lazyVal.name} in 3.0-3.2.x")
+                      assert(
+                        lazyVal.initMethod.isEmpty,
+                        s"Did not expect lzyINIT method for ${lazyVal.name} in 3.0-3.2.x"
+                      )
                       assert(
                         lazyVal.storageField.descriptor != "Ljava/lang/Object;",
                         s"Expected typed storage field for ${lazyVal.name} in 3.0-3.2.x"
@@ -212,13 +224,29 @@ class LazyValDetectionTests extends FunSuite {
 
                   case ScalaVersion.Scala33x_37x =>
                     lazyVals.foreach { lazyVal =>
-                      assert(lazyVal.bitmapField.isEmpty, s"Did not expect bitmap field for ${lazyVal.name} in 3.3-3.7.x")
+                      assert(
+                        lazyVal.bitmapField.isEmpty,
+                        s"Did not expect bitmap field for ${lazyVal.name} in 3.3-3.7.x"
+                      )
                       assert(lazyVal.initMethod.isDefined, s"Expected lzyINIT method for ${lazyVal.name} in 3.3-3.7.x")
                       assert(lazyVal.offsetField.isDefined, s"Expected OFFSET field for ${lazyVal.name} in 3.3-3.7.x")
                       assertEquals(
                         lazyVal.storageField.descriptor,
                         "Ljava/lang/Object;",
                         s"Expected Object storage field for ${lazyVal.name} in 3.3-3.7.x"
+                      )
+                    }
+
+                  case ScalaVersion.Scala38Plus =>
+                    lazyVals.foreach { lazyVal =>
+                      assert(lazyVal.bitmapField.isEmpty, s"Did not expect bitmap field for ${lazyVal.name} in 3.8+")
+                      assert(lazyVal.offsetField.isEmpty, s"Did not expect OFFSET field for ${lazyVal.name} in 3.8+")
+                      assert(lazyVal.varHandleField.isDefined, s"Expected VarHandle field for ${lazyVal.name} in 3.8+")
+                      assert(lazyVal.initMethod.isDefined, s"Expected lzyINIT method for ${lazyVal.name} in 3.8+")
+                      assertEquals(
+                        lazyVal.storageField.descriptor,
+                        "Ljava/lang/Object;",
+                        s"Expected Object storage field for ${lazyVal.name} in 3.8+"
                       )
                     }
 

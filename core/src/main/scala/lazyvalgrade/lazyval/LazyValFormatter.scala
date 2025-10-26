@@ -120,3 +120,40 @@ object LazyValFormatter:
 
       case LazyValComparisonResult.DifferentImplementations(v1, v2, _, _, diffs) =>
         s"Different: $v1 vs $v2 (${diffs.size} differences)"
+
+  /** Formats a semantic comparison result. */
+  def formatSemanticComparisonResult(result: SemanticLazyValComparisonResult): String =
+    result match
+      case SemanticLazyValComparisonResult.Identical =>
+        "✓ Lazy val implementations are IDENTICAL"
+
+      case SemanticLazyValComparisonResult.BothNoLazyVals =>
+        "✓ Both classes have no lazy vals (trivially identical)"
+
+      case SemanticLazyValComparisonResult.OnlyOneHasLazyVals(firstHas, count) =>
+        val which = if firstHas then "first" else "second"
+        s"✗ Only $which class has lazy vals ($count total)"
+
+      case SemanticLazyValComparisonResult.Different(reasons) =>
+        val sb = new StringBuilder()
+        sb.append(s"✗ Lazy val implementations DIFFER (${reasons.size} reason(s)):\n")
+        reasons.foreach { reason =>
+          sb.append(s"  • $reason\n")
+        }
+        sb.toString()
+
+  /** Formats a semantic comparison summary (one line). */
+  def formatSemanticComparisonSummary(result: SemanticLazyValComparisonResult): String =
+    result match
+      case SemanticLazyValComparisonResult.Identical =>
+        "Identical"
+
+      case SemanticLazyValComparisonResult.BothNoLazyVals =>
+        "Identical (no lazy vals)"
+
+      case SemanticLazyValComparisonResult.OnlyOneHasLazyVals(firstHas, count) =>
+        val which = if firstHas then "first" else "second"
+        s"Different (only $which has $count)"
+
+      case SemanticLazyValComparisonResult.Different(reasons) =>
+        s"Different (${reasons.size} reasons)"

@@ -6,17 +6,18 @@ import scala.util.matching.Regex
 
 /** Detects and classifies lazy vals in Scala 3 classfiles.
   *
-  * Identifies lazy val implementation patterns from Scala 3.0 through 3.8+
-  * and classifies them by version family.
+  * Identifies lazy val implementation patterns from Scala 3.0 through 3.8+ and classifies them by version family.
   */
 final class LazyValDetector:
-  import scribe.{info, debug, warn}
+  import scribe.{info, debug, warn, error}
   import LazyValDetector._
 
   /** Detects lazy vals in a classfile and classifies their implementation version.
     *
-    * @param classInfo The parsed classfile
-    * @return Detection result indicating if lazy vals were found and their versions
+    * @param classInfo
+    *   The parsed classfile
+    * @return
+    *   Detection result indicating if lazy vals were found and their versions
     */
   def detect(classInfo: ClassInfo): LazyValDetectionResult =
     debug(s"Detecting lazy vals in class ${classInfo.name}")
@@ -48,16 +49,15 @@ final class LazyValDetector:
     // Step 4: Determine overall version
     val versions = lazyVals.map(_.version).distinct
 
-    if versions.size == 1 then
-      LazyValDetectionResult.LazyValsFound(lazyVals, versions.head)
+    if versions.size == 1 then LazyValDetectionResult.LazyValsFound(lazyVals, versions.head)
     else
-      warn(s"Mixed versions detected: $versions")
+      error(s"Mixed versions detected: $versions")
       LazyValDetectionResult.MixedVersions(lazyVals)
 
   /** Builds a mapping from OFFSET field names to lazy val storage field names.
     *
-    * Parses <clinit> bytecode to find LDC instructions that load field names
-    * before PUTSTATIC OFFSET$_m_<N> instructions.
+    * Parses <clinit> bytecode to find LDC instructions that load field names before PUTSTATIC OFFSET$_m_<N>
+    * instructions.
     *
     * Returns Map[offsetFieldName -> storageFieldName]
     */
@@ -152,17 +152,19 @@ final class LazyValDetector:
         classInfo
       )
 
-      Some(LazyValInfo(
-        name = name,
-        index = index,
-        offsetField = offsetField,
-        bitmapField = bitmapField,
-        storageField = storageField,
-        varHandleField = varHandleField,
-        initMethod = initMethod,
-        accessorMethod = accessorMethod,
-        version = version
-      ))
+      Some(
+        LazyValInfo(
+          name = name,
+          index = index,
+          offsetField = offsetField,
+          bitmapField = bitmapField,
+          storageField = storageField,
+          varHandleField = varHandleField,
+          initMethod = initMethod,
+          accessorMethod = accessorMethod,
+          version = version
+        )
+      )
     }
 
   /** Parses storage field name to extract lazy val name and index.
@@ -275,7 +277,8 @@ final class LazyValDetector:
         case Some(method) =>
           val bytecode = method.bytecodeText
           if bytecode.contains("getDeclaredField") &&
-             bytecode.contains("getOffsetStatic") then
+            bytecode.contains("getOffsetStatic")
+          then
             debug("Uses getDeclaredField + getOffsetStatic -> Scala 3.2.x")
             ScalaVersion.Scala32x
           else if bytecode.contains("LazyVals$.getOffset (") then
@@ -290,9 +293,10 @@ final class LazyValDetector:
 
     // Check for Object-based with OFFSET (3.3-3.7.x)
     else if offsetField.isDefined &&
-             initMethod.isDefined &&
-             storageField.descriptor == "Ljava/lang/Object;" &&
-             isVolatile(storageField.access) then
+      initMethod.isDefined &&
+      storageField.descriptor == "Ljava/lang/Object;" &&
+      isVolatile(storageField.access)
+    then
       // Verify by checking for objCAS usage
       initMethod match
         case Some(method) =>
@@ -304,7 +308,6 @@ final class LazyValDetector:
             ScalaVersion.Unknown
         case None =>
           ScalaVersion.Unknown
-
     else
       warn(s"Could not determine version for field ${storageField.name}")
       warn(s"  offsetField: ${offsetField.isDefined}")
