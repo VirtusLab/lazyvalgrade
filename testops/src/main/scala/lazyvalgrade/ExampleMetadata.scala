@@ -15,7 +15,8 @@ final case class ExpectedClass(
 
 final case class ExampleMetadata(
   description: String,
-  expectedClasses: List[ExpectedClass]
+  expectedClasses: List[ExpectedClass],
+  expectedOutput: Option[String] = None
 )
 
 object ExampleMetadata {

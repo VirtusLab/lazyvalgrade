@@ -10,5 +10,6 @@
         }
       ]
     }
-  ]
+  ],
+  "expectedOutput": "simpleLazy = 42"
 }

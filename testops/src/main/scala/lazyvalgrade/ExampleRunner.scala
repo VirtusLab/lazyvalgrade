@@ -71,9 +71,9 @@ class ExampleRunner(
 
     info(s"Compiling with Scala $scalaVersion...")
 
-    // Run scala-cli compile
+    // Run scala-cli compile with JDK 17 (for compatibility with older Scala versions)
     val result = os
-      .proc("scala-cli", "compile", "-S", scalaVersion, targetDir.toString)
+      .proc("scala-cli", "compile", "--jvm", "17", "-S", scalaVersion, targetDir.toString)
       .call(cwd = targetDir)
 
     val output = result.out.text()

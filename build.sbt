@@ -44,7 +44,28 @@ lazy val tests = project
   )
   .dependsOn(core, testops)
 
+lazy val cli = project
+  .in(file("cli"))
+  .settings(
+    name := "lazyvalgrade-cli",
+    version := "0.1.0-SNAPSHOT",
+    scalaVersion := "3.7.3",
+    libraryDependencies ++= Seq(
+      "com.lihaoyi" %% "os-lib" % "0.11.3",
+      "com.lihaoyi" %% "fansi" % "0.5.0",
+      "com.outr" %% "scribe" % "3.15.0"
+    ),
+    Compile / mainClass := Some("lazyvalgrade.cli.Main"),
+    assembly / mainClass := Some("lazyvalgrade.cli.Main"),
+    assembly / assemblyJarName := "lazyvalgrade.jar",
+    assembly / assemblyMergeStrategy := {
+      case PathList("META-INF", xs @ _*) => MergeStrategy.discard
+      case x => MergeStrategy.first
+    }
+  )
+  .dependsOn(core)
+
 lazy val root = project
   .in(file("."))
   .settings(name := "lazyvalgrade")
-  .aggregate(core, testops, tests)
+  .aggregate(core, testops, tests, cli)
