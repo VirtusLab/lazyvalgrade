@@ -78,8 +78,17 @@ cp -r "$CLASSES_DIR"/* patched/
 echo -e "${GREEN}✓ Copied classfiles${NC}"
 echo ""
 
-# Step 5: Test original bytecode (should have Unsafe warnings)
-echo -e "${BLUE}Step 5: Testing original bytecode (expecting Unsafe warnings)${NC}"
+# Step 5: Inspect original bytecode
+echo -e "${BLUE}Step 5: Inspecting original bytecode (Unsafe-based implementation)${NC}"
+echo -e "${BOLD}${YELLOW}═══════════════════════════════════════════════════════════════${NC}"
+echo -e "${BOLD}${YELLOW}                 ORIGINAL BYTECODE (javap -v -p)              ${NC}"
+echo -e "${BOLD}${YELLOW}═══════════════════════════════════════════════════════════════${NC}"
+javap -v -p original/SimpleLazyVal\$.class
+echo -e "${BOLD}${YELLOW}═══════════════════════════════════════════════════════════════${NC}"
+echo ""
+
+# Step 6: Test original bytecode (should have Unsafe warnings)
+echo -e "${BLUE}Step 6: Testing original bytecode (expecting Unsafe warnings)${NC}"
 ORIGINAL_CP="$TEST_DIR/original:${CLASSPATH#*:}"
 ORIGINAL_OUTPUT=$(java -cp "$ORIGINAL_CP" SimpleLazyVal 2>&1)
 echo -e "${YELLOW}Original scala code output:${NC}"
@@ -101,15 +110,24 @@ else
 fi
 echo ""
 
-# Step 6: Run assembly jar to patch bytecode
-echo -e "${BLUE}Step 6: Running assembly jar to patch bytecode${NC}"
+# Step 7: Run assembly jar to patch bytecode
+echo -e "${BLUE}Step 7: Running assembly jar to patch bytecode${NC}"
 echo -e "${YELLOW}Command: java -jar $ASSEMBLY_JAR patched/${NC}"
 echo ""
 java -jar "$ASSEMBLY_JAR" patched/
 echo ""
 
-# Step 7: Test patched bytecode (should NOT have Unsafe warnings)
-echo -e "${BLUE}Step 7: Testing patched bytecode (expecting NO Unsafe warnings)${NC}"
+# Step 8: Inspect patched bytecode
+echo -e "${BLUE}Step 8: Inspecting patched bytecode (VarHandle-based implementation)${NC}"
+echo -e "${BOLD}${GREEN}═══════════════════════════════════════════════════════════════${NC}"
+echo -e "${BOLD}${GREEN}                 PATCHED BYTECODE (javap -v -p)               ${NC}"
+echo -e "${BOLD}${GREEN}═══════════════════════════════════════════════════════════════${NC}"
+javap -v -p patched/SimpleLazyVal\$.class
+echo -e "${BOLD}${GREEN}═══════════════════════════════════════════════════════════════${NC}"
+echo ""
+
+# Step 9: Test patched bytecode (should NOT have Unsafe warnings)
+echo -e "${BLUE}Step 9: Testing patched bytecode (expecting NO Unsafe warnings)${NC}"
 PATCHED_CP="$TEST_DIR/patched:${CLASSPATH#*:}"
 PATCHED_OUTPUT=$(java -cp "$PATCHED_CP" SimpleLazyVal 2>&1)
 echo -e "${GREEN}Patched scala code output:${NC}"
@@ -133,8 +151,8 @@ else
 fi
 echo ""
 
-# Step 8: Verify the transformation
-echo -e "${BLUE}Step 8: Verifying bytecode transformation${NC}"
+# Step 10: Verify the transformation
+echo -e "${BLUE}Step 10: Verifying bytecode transformation${NC}"
 if javap -v -p patched/SimpleLazyVal\$.class 2>/dev/null | grep -q "VarHandle"; then
     echo -e "${GREEN}✓ Patched bytecode uses VarHandle (3.8+ format)${NC}"
 else
