@@ -1,0 +1,16 @@
+{
+  "description": "Lazy val in abstract class, extended by class",
+  "mainClassName": "main",
+  "expectedClasses": [
+    {
+      "className": "Bar",
+      "lazyVals": [
+        {
+          "name": "b",
+          "index": 1
+        }
+      ]
+    }
+  ],
+  "expectedOutput": "abstract-test"
+}

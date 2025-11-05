@@ -1,0 +1,16 @@
+{
+  "description": "Lazy val in trait, extended by class",
+  "mainClassName": "main",
+  "expectedClasses": [
+    {
+      "className": "Foo",
+      "lazyVals": [
+        {
+          "name": "b",
+          "index": 1
+        }
+      ]
+    }
+  ],
+  "expectedOutput": "trait-test"
+}
