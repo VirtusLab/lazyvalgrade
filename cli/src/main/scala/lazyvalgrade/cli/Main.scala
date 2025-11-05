@@ -1,9 +1,7 @@
 package lazyvalgrade.cli
 
-import lazyvalgrade.classfile.ClassfileParser
-import lazyvalgrade.lazyval.{LazyValDetector, LazyValDetectionResult, ScalaVersion}
+import lazyvalgrade.analysis.{LazyValAnalyzer, ClassfileGroup}
 import lazyvalgrade.patching.BytecodePatcher
-import java.nio.file.Files
 import scala.util.{Try, Success, Failure}
 
 /** CLI tool for patching Scala 3.x lazy val bytecode to 3.8+ format.
@@ -14,22 +12,22 @@ import scala.util.{Try, Success, Failure}
   */
 object Main {
 
-  /** Result of patching a single classfile */
-  sealed trait PatchFileResult
-  object PatchFileResult {
-    case object Patched extends PatchFileResult
-    case object NotApplicable extends PatchFileResult
-    final case class Failed(error: String) extends PatchFileResult
-    final case class Skipped(reason: String) extends PatchFileResult
+  /** Result of patching a classfile group */
+  sealed trait PatchGroupResult
+  object PatchGroupResult {
+    case class Patched(filesPatched: Int) extends PatchGroupResult
+    case object NotApplicable extends PatchGroupResult
+    final case class Failed(error: String) extends PatchGroupResult
   }
 
   /** Summary of patching operations */
   case class PatchSummary(
-      total: Int,
-      patched: Int,
+      totalGroups: Int,
+      totalFiles: Int,
+      patchedGroups: Int,
+      patchedFiles: Int,
       notApplicable: Int,
-      failed: Int,
-      skipped: Int
+      failed: Int
   ) {
     def successful: Boolean = failed == 0
   }
@@ -57,7 +55,7 @@ object Main {
     println(fansi.Color.Cyan(s"Processing directory: $targetDir"))
     println()
 
-    // Find all classfiles
+    // Find and group classfiles
     val classFiles = findClassFiles(targetDir)
 
     if (classFiles.isEmpty) {
@@ -68,11 +66,25 @@ object Main {
     println(fansi.Color.Cyan(s"Found ${classFiles.size} classfile(s)"))
     println()
 
-    // Process each classfile
-    val results = classFiles.map { classFile =>
-      val relativePath = classFile.relativeTo(targetDir)
-      processClassFile(classFile, relativePath)
+    // Read all classfiles into memory
+    val classfileMap = classFiles.map { path =>
+      val className = path.relativeTo(targetDir).toString.stripSuffix(".class").replace("/", ".")
+      (className, os.read.bytes(path))
+    }.toMap
+
+    // Group classfiles (identify companion pairs)
+    val groups = LazyValAnalyzer.group(classfileMap) match {
+      case Right(g) => g
+      case Left(error) =>
+        Console.err.println(fansi.Color.Red(s"Error grouping classfiles: $error"))
+        sys.exit(1)
     }
+
+    println(fansi.Color.Cyan(s"Grouped into ${groups.size} classfile group(s)"))
+    println()
+
+    // Process each group
+    val results = groups.map(processGroup(_, targetDir))
 
     // Print summary
     println()
@@ -94,82 +106,44 @@ object Main {
       .toSeq
   }
 
-  /** Processes a single classfile */
-  private def processClassFile(classFile: os.Path, relativePath: os.RelPath): (os.RelPath, PatchFileResult) = {
-    print(fansi.Color.Cyan(s"Processing: $relativePath ... "))
+  /** Processes a classfile group */
+  private def processGroup(group: ClassfileGroup, targetDir: os.Path): (String, PatchGroupResult) = {
+    val groupName = group.primaryName
+    print(fansi.Color.Cyan(s"Processing: $groupName ... "))
 
     Try {
-      // Read classfile
-      val bytes = os.read.bytes(classFile)
+      BytecodePatcher.patch(group) match {
+        case BytecodePatcher.PatchResult.PatchedSingle(name, bytes) =>
+          // Write back single file
+          val filePath = targetDir / s"${name.replace('.', '/')}.class"
+          os.write.over(filePath, bytes)
+          PatchGroupResult.Patched(1)
 
-      // Parse to detect version and lazy vals
-      val classInfo = ClassfileParser.parse(bytes) match {
-        case Right(info) => info
-        case Left(error) => throw new RuntimeException(s"Failed to parse classfile: $error")
-      }
+        case BytecodePatcher.PatchResult.PatchedPair(companionObjectName, className, companionObjectBytes, classBytes) =>
+          // Write back both files
+          val objectPath = targetDir / s"${companionObjectName.replace('.', '/')}.class"
+          val classPath = targetDir / s"${className.replace('.', '/')}.class"
+          os.write.over(objectPath, companionObjectBytes)
+          os.write.over(classPath, classBytes)
+          PatchGroupResult.Patched(2)
 
-      val detectionResult = LazyValDetector.detect(classInfo)
+        case BytecodePatcher.PatchResult.NotApplicable =>
+          PatchGroupResult.NotApplicable
 
-      detectionResult match {
-        case LazyValDetectionResult.NoLazyVals =>
-          // No lazy vals, skip
-          PatchFileResult.Skipped("no lazy vals")
-
-        case LazyValDetectionResult.LazyValsFound(lazyVals, version) =>
-          version match {
-            case ScalaVersion.Scala30x_31x =>
-              // Fail fast: unsupported version
-              throw new RuntimeException(
-                s"Unsupported Scala version: 3.0-3.1 lazy vals detected (not yet implemented)"
-              )
-
-            case ScalaVersion.Scala32x =>
-              // Fail fast: unsupported version
-              throw new RuntimeException(
-                s"Unsupported Scala version: 3.2 lazy vals detected (not yet implemented)"
-              )
-
-            case ScalaVersion.Scala33x_37x =>
-              // Patchable version
-              BytecodePatcher.patch(bytes) match {
-                case BytecodePatcher.PatchResult.Patched(patchedBytes) =>
-                  // Write back in place
-                  os.write.over(classFile, patchedBytes)
-                  PatchFileResult.Patched
-
-                case BytecodePatcher.PatchResult.NotApplicable =>
-                  PatchFileResult.NotApplicable
-
-                case BytecodePatcher.PatchResult.Failed(error) =>
-                  throw new RuntimeException(s"Patching failed: $error")
-              }
-
-            case ScalaVersion.Scala38Plus =>
-              // Already 3.8+, no patching needed
-              PatchFileResult.NotApplicable
-
-            case ScalaVersion.Unknown =>
-              // Fail fast: unknown version
-              throw new RuntimeException("Unknown Scala version detected")
-          }
-
-        case LazyValDetectionResult.MixedVersions(versions) =>
-          // Fail fast: mixed versions
-          throw new RuntimeException(s"Mixed Scala versions detected: ${versions.mkString(", ")}")
+        case BytecodePatcher.PatchResult.Failed(error) =>
+          throw new RuntimeException(s"Patching failed: $error")
       }
     } match {
       case Success(result) =>
         result match {
-          case PatchFileResult.Patched =>
-            println(fansi.Color.Green("✓ PATCHED"))
-          case PatchFileResult.NotApplicable =>
+          case PatchGroupResult.Patched(count) =>
+            println(fansi.Color.Green(s"✓ PATCHED ($count file${if (count > 1) "s" else ""})"))
+          case PatchGroupResult.NotApplicable =>
             println(fansi.Color.Blue("○ NOT APPLICABLE"))
-          case PatchFileResult.Skipped(reason) =>
-            println(fansi.Color.LightBlue(s"- SKIPPED ($reason)"))
-          case PatchFileResult.Failed(error) =>
+          case PatchGroupResult.Failed(error) =>
             println(fansi.Color.Red(s"✗ FAILED: $error"))
         }
-        (relativePath, result)
+        (groupName, result)
 
       case Failure(exception) =>
         println(fansi.Color.Red(s"✗ FAILED: ${exception.getMessage}"))
@@ -182,39 +156,45 @@ object Main {
   }
 
   /** Computes summary statistics */
-  private def computeSummary(results: Seq[(os.RelPath, PatchFileResult)]): PatchSummary = {
-    val total = results.size
-    val patched = results.count(_._2 == PatchFileResult.Patched)
-    val notApplicable = results.count(_._2 == PatchFileResult.NotApplicable)
-    val skipped = results.count {
-      case (_, PatchFileResult.Skipped(_)) => true
-      case _                               => false
+  private def computeSummary(results: Seq[(String, PatchGroupResult)]): PatchSummary = {
+    val totalGroups = results.size
+    val totalFiles = results.map(_._2 match {
+      case PatchGroupResult.Patched(count) => count
+      case _ => 0
+    }).sum + results.count(_._2 == PatchGroupResult.NotApplicable)
+
+    val patchedGroups = results.count {
+      case (_, PatchGroupResult.Patched(_)) => true
+      case _ => false
     }
+    val patchedFiles = results.collect {
+      case (_, PatchGroupResult.Patched(count)) => count
+    }.sum
+    val notApplicable = results.count(_._2 == PatchGroupResult.NotApplicable)
     val failed = results.count {
-      case (_, PatchFileResult.Failed(_)) => true
-      case _                              => false
+      case (_, PatchGroupResult.Failed(_)) => true
+      case _ => false
     }
 
-    PatchSummary(total, patched, notApplicable, failed, skipped)
+    PatchSummary(totalGroups, totalFiles, patchedGroups, patchedFiles, notApplicable, failed)
   }
 
   /** Prints summary of operations */
-  private def printSummary(results: Seq[(os.RelPath, PatchFileResult)]): Unit = {
+  private def printSummary(results: Seq[(String, PatchGroupResult)]): Unit = {
     val summary = computeSummary(results)
 
     println(fansi.Bold.On("Summary:"))
-    println(s"  Total files processed: ${summary.total}")
-    println(fansi.Color.Green(s"  Patched: ${summary.patched}"))
+    println(s"  Total groups processed: ${summary.totalGroups}")
+    println(fansi.Color.Green(s"  Patched: ${summary.patchedGroups} group(s), ${summary.patchedFiles} file(s)"))
     println(fansi.Color.Blue(s"  Not applicable: ${summary.notApplicable}"))
-    println(fansi.Color.LightBlue(s"  Skipped: ${summary.skipped}"))
 
     if (summary.failed > 0) {
       println(fansi.Color.Red(s"  Failed: ${summary.failed}"))
       println()
-      println(fansi.Color.Red("Some files failed to patch!"))
+      println(fansi.Color.Red("Some groups failed to patch!"))
     } else {
       println()
-      println(fansi.Color.Green("✓ All files processed successfully!"))
+      println(fansi.Color.Green("✓ All groups processed successfully!"))
     }
   }
 }

@@ -2,6 +2,17 @@ package lazyvalgrade.lazyval
 
 import lazyvalgrade.classfile.{FieldInfo, MethodInfo}
 
+/** Location of the OFFSET field in companion object/class scenarios. */
+enum OffsetFieldLocation:
+  /** OFFSET field is in the same class as the lazy val implementation */
+  case InSameClass
+
+  /** OFFSET field is in the companion class (while lazy val impl is in companion object) */
+  case InCompanionClass
+
+  /** No OFFSET field present (e.g., 3.8+ VarHandle, or no lazy vals) */
+  case NoOffsetField
+
 /** Scala compiler version family for lazy val implementation. */
 enum ScalaVersion:
   /** Scala 3.0.x - 3.1.x: Bitmap-based inline with LazyVals$.getOffset */
@@ -41,6 +52,9 @@ final case class LazyValInfo(
 
     /** The offset field (OFFSET$_m_<N>) - present in 3.0-3.7.x */
     offsetField: Option[FieldInfo],
+
+    /** Location of the offset field (same class vs companion class) */
+    offsetFieldLocation: OffsetFieldLocation,
 
     /** The bitmap field (<N>bitmap$<M>) - present only in 3.0-3.2.x */
     bitmapField: Option[FieldInfo],

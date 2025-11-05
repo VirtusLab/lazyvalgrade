@@ -1,5 +1,6 @@
 {
   "description": "No lazy val example - should be trivially identical",
+  "mainClassName": "main",
   "expectedClasses": [
     {
       "className": "NoLazyVal$",

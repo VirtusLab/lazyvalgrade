@@ -12,12 +12,24 @@ import duration._
   *   Root directory containing example subdirectories
   * @param workspaceRoot
   *   Root directory for compilation output
+  * @param quiet
+  *   If true, suppress all logging except errors and only show scala-cli output on failure
   */
 class ExampleRunner(
     examplesRoot: os.Path,
-    workspaceRoot: os.Path
+    workspaceRoot: os.Path,
+    quiet: Boolean = false
 ) {
   import scribe._
+
+  // Set scribe logging level based on quiet mode
+  if (quiet) {
+    scribe.Logger.root
+      .clearHandlers()
+      .clearModifiers()
+      .withHandler(minimumLevel = Some(Level.Error))
+      .replace()
+  }
 
   /** Validates that a directory exists and is a directory */
   private def validateDirectory(path: os.Path, name: String): Either[String, os.Path] =
@@ -69,15 +81,31 @@ class ExampleRunner(
         os.copy.over(source, target)
       }
 
-    info(s"Compiling with Scala $scalaVersion...")
+    if (!quiet) {
+      info(s"Compiling with Scala $scalaVersion...")
+    }
 
     // Run scala-cli compile with JDK 17 (for compatibility with older Scala versions)
     val result = os
       .proc("scala-cli", "compile", "--jvm", "17", "-S", scalaVersion, targetDir.toString)
-      .call(cwd = targetDir)
+      .call(cwd = targetDir, stderr = os.Pipe, stdout = os.Pipe, check = false)
 
-    val output = result.out.text()
-    debug(s"Compilation output for $scalaVersion: $output")
+    // Only log output if compilation failed or not in quiet mode
+    if (result.exitCode != 0) {
+      val stdout = result.out.text()
+      val stderr = result.err.text()
+      error(s"Compilation failed for Scala $scalaVersion (exit code ${result.exitCode})")
+      if (stdout.nonEmpty) {
+        error(s"stdout:\n$stdout")
+      }
+      if (stderr.nonEmpty) {
+        error(s"stderr:\n$stderr")
+      }
+      throw new Exception(s"Compilation failed with exit code ${result.exitCode}")
+    } else if (!quiet) {
+      val output = result.out.text()
+      debug(s"Compilation output for $scalaVersion: $output")
+    }
 
     // Collect class files
     val classFiles = collectClassFiles(targetDir)
@@ -110,7 +138,9 @@ class ExampleRunner(
     val scalaBuildDir = compiledDir / ".scala-build"
 
     if !os.exists(scalaBuildDir) then
-      warn(s".scala-build directory not found in $compiledDir")
+      if (!quiet) {
+        warn(s".scala-build directory not found in $compiledDir")
+      }
       return Set.empty
 
     // Find all .class files, skip .bloop directories
@@ -164,7 +194,21 @@ class ExampleRunner(
       if examplePath.startsWith(os.root) then examplePath
       else examplesRoot / os.RelPath(examplePath.toString)
 
-    info(s"Running example: ${resolvedExample.last}")
+    if (!quiet) {
+      info(s"Running example: ${resolvedExample.last}")
+    }
+
+    // Clean desk protocol: nuke all .scala-build and .bsp directories from source
+    // BEFORE any parallel compilation starts to avoid race conditions
+    Seq(".scala-build", ".bsp").foreach { dirName =>
+      val buildDir = resolvedExample / dirName
+      if (os.exists(buildDir)) {
+        if (!quiet) {
+          debug(s"Cleaning $dirName from ${resolvedExample.last}...")
+        }
+        os.remove.all(buildDir)
+      }
+    }
 
     for {
       _ <- validateDirectory(resolvedExample, "Example directory")
@@ -180,15 +224,17 @@ class ExampleRunner(
           Future {
             blocking {
               val result = compileWithScalaCli(resolvedExample, version, exampleWorkspace)
-              result match {
-                case Success(r) if r.success =>
-                  info(
-                    s"  ✓ Scala $version compiled successfully (${r.classFiles.size} class files)"
-                  )
-                case Success(r) =>
-                  warn(s"  ✗ Scala $version compilation failed")
-                case Failure(e) =>
-                  error(s"  ✗ Scala $version failed with exception: ${e.getMessage}")
+              if (!quiet) {
+                result match {
+                  case Success(r) if r.success =>
+                    info(
+                      s"  ✓ Scala $version compiled successfully (${r.classFiles.size} class files)"
+                    )
+                  case Success(r) =>
+                    warn(s"  ✗ Scala $version compilation failed")
+                  case Failure(e) =>
+                    error(s"  ✗ Scala $version failed with exception: ${e.getMessage}")
+                }
               }
               version -> result.get
             }
@@ -238,10 +284,10 @@ class ExampleRunner(
 object ExampleRunner {
 
   /** Creates an ExampleRunner with os.Path parameters */
-  def apply(examplesRoot: os.Path, workspaceRoot: os.Path): ExampleRunner =
-    new ExampleRunner(examplesRoot, workspaceRoot)
+  def apply(examplesRoot: os.Path, workspaceRoot: os.Path, quiet: Boolean = false): ExampleRunner =
+    new ExampleRunner(examplesRoot, workspaceRoot, quiet)
 
   /** Creates an ExampleRunner with String paths */
-  def apply(examplesRoot: String, workspaceRoot: String): ExampleRunner =
-    new ExampleRunner(os.Path(examplesRoot), os.Path(workspaceRoot))
+  def apply(examplesRoot: String, workspaceRoot: String, quiet: Boolean): ExampleRunner =
+    new ExampleRunner(os.Path(examplesRoot), os.Path(workspaceRoot), quiet)
 }

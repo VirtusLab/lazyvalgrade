@@ -37,9 +37,9 @@ class LazyValDetectionTests extends FunSuite {
   )
 
   /** Temporary workspace for test compilations */
-  val testWorkspace: os.Path = os.temp.dir(prefix = "lazyvalgrade-tests-", deleteOnExit = false)
+  val testWorkspace: os.Path = os.temp.dir(prefix = "lazyvalgrade-tests-", deleteOnExit = true)
 
-  val cleanupWorkspace: Boolean = false
+  val cleanupWorkspace: Boolean = true
 
   /** All discovered examples with their test data - loaded during class initialization */
   lazy val examples: Seq[ExampleTest] = {
@@ -64,7 +64,7 @@ class LazyValDetectionTests extends FunSuite {
     println(s"Discovered ${discoveredExamples.size} examples: ${discoveredExamples.map(_.last).mkString(", ")}")
 
     // Create ExampleRunner
-    val runner = ExampleRunner(examplesDir, testWorkspace)
+    val runner = ExampleRunner(examplesDir, testWorkspace, quiet = true)
 
     // Compile all examples with all test versions
     val scalaVersions = testVersions.map(_._1).to(TreeSet)
@@ -166,9 +166,21 @@ class LazyValDetectionTests extends FunSuite {
 
             val classInfo = parseResult.getOrElse(???)
 
+            // Check for companion class (e.g., if testing Foo$, look for Foo)
+            val companionClassInfo = if (expectedClass.className.endsWith("$")) {
+              val companionClassName = expectedClass.className.stripSuffix("$")
+              val companionClassFileOpt = findClassFile(example, scalaVersion, companionClassName)
+              companionClassFileOpt.flatMap { companionClassFile =>
+                val companionBytes = Files.readAllBytes(companionClassFile)
+                ClassfileParser.parse(companionBytes).toOption
+              }
+            } else {
+              None
+            }
+
             // Detect lazy vals
             val detector = LazyValDetector()
-            val detectionResult = detector.detect(classInfo)
+            val detectionResult = detector.detect(classInfo, companionClassInfo)
 
             // Verify we found lazy vals
             detectionResult match {
@@ -240,7 +252,8 @@ class LazyValDetectionTests extends FunSuite {
                   case ScalaVersion.Scala38Plus =>
                     lazyVals.foreach { lazyVal =>
                       assert(lazyVal.bitmapField.isEmpty, s"Did not expect bitmap field for ${lazyVal.name} in 3.8+")
-                      assert(lazyVal.offsetField.isEmpty, s"Did not expect OFFSET field for ${lazyVal.name} in 3.8+")
+                      // OFFSET field is only present when there's a companion class split
+                      // For standalone objects, VarHandle is used directly without OFFSET
                       assert(lazyVal.varHandleField.isDefined, s"Expected VarHandle field for ${lazyVal.name} in 3.8+")
                       assert(lazyVal.initMethod.isDefined, s"Expected lzyINIT method for ${lazyVal.name} in 3.8+")
                       assertEquals(

@@ -1,0 +1,16 @@
+{
+  "description": "Lazy val in standalone class (no companion)",
+  "mainClassName": "main",
+  "expectedClasses": [
+    {
+      "className": "Foo",
+      "lazyVals": [
+        {
+          "name": "a",
+          "index": 1
+        }
+      ]
+    }
+  ],
+  "expectedOutput": "test"
+}

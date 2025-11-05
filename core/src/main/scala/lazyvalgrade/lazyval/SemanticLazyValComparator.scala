@@ -49,14 +49,18 @@ final class SemanticLazyValComparator:
     */
   def compare(
       class1: ClassInfo,
-      class2: ClassInfo
+      class2: ClassInfo,
+      companion1: Option[ClassInfo] = None,
+      companion2: Option[ClassInfo] = None
   ): SemanticLazyValComparisonResult =
     debug(s"Semantic comparison of lazy vals: ${class1.name} vs ${class2.name}")
+    companion1.foreach(c => debug(s"  class1 companion: ${c.name}"))
+    companion2.foreach(c => debug(s"  class2 companion: ${c.name}"))
 
     // Detect lazy vals in both classes
     val detector = LazyValDetector()
-    val result1 = detector.detect(class1)
-    val result2 = detector.detect(class2)
+    val result1 = detector.detect(class1, companion1)
+    val result2 = detector.detect(class2, companion2)
 
     (result1, result2) match
       case (LazyValDetectionResult.NoLazyVals, LazyValDetectionResult.NoLazyVals) =>
@@ -252,5 +256,10 @@ object SemanticLazyValComparator:
   def apply(): SemanticLazyValComparator = new SemanticLazyValComparator()
 
   /** Convenience method to compare lazy vals semantically. */
-  def compare(class1: ClassInfo, class2: ClassInfo): SemanticLazyValComparisonResult =
-    SemanticLazyValComparator().compare(class1, class2)
+  def compare(
+      class1: ClassInfo,
+      class2: ClassInfo,
+      companion1: Option[ClassInfo] = None,
+      companion2: Option[ClassInfo] = None
+  ): SemanticLazyValComparisonResult =
+    SemanticLazyValComparator().compare(class1, class2, companion1, companion2)

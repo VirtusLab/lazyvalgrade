@@ -67,7 +67,7 @@ class SemanticLazyValComparisonTests extends FunSuite {
     println(s"Compiling with Scala versions: ${allVersions.mkString(", ")}")
 
     // Create runner and compile
-    val runner = ExampleRunner(examplesDir, testWorkspace)
+    val runner = ExampleRunner(examplesDir, testWorkspace, quiet = true)
 
     val loadedExamples = discoveredExamples.flatMap { examplePath =>
       val exampleName = examplePath.last
@@ -150,8 +150,23 @@ class SemanticLazyValComparisonTests extends FunSuite {
               fail(s"Failed to parse classfile for Scala $version2")
             }
 
+            // Check if we need companion classes (for module classes ending with $)
+            val companion1Opt = if expectedClass.className.endsWith("$") then
+              val companionClassName = expectedClass.className.dropRight(1)
+              findClassFile(example, version1, companionClassName).flatMap { companionPath =>
+                ClassfileParser.parse(Files.readAllBytes(companionPath)).toOption
+              }
+            else None
+
+            val companion2Opt = if expectedClass.className.endsWith("$") then
+              val companionClassName = expectedClass.className.dropRight(1)
+              findClassFile(example, version2, companionClassName).flatMap { companionPath =>
+                ClassfileParser.parse(Files.readAllBytes(companionPath)).toOption
+              }
+            else None
+
             // Perform semantic comparison
-            val result = SemanticLazyValComparator.compare(class1, class2)
+            val result = SemanticLazyValComparator.compare(class1, class2, companion1Opt, companion2Opt)
 
             // Verify expected result
             if shouldBeIdentical then
@@ -168,16 +183,16 @@ class SemanticLazyValComparisonTests extends FunSuite {
             // Print detailed results for debugging
             result match {
               case SemanticLazyValComparisonResult.Identical =>
-                println(s"  ✓ Lazy vals are identical")
+                println(s"  ✓ Lazy vals are identical for Scala $version1 and $version2")
 
               case SemanticLazyValComparisonResult.Different(reasons) =>
-                println(s"  ✗ Lazy vals differ:")
+                println(s"  ✗ Lazy vals differ for Scala $version1 and $version2:")
                 reasons.foreach { reason =>
                   println(s"    - $reason")
                 }
 
               case other =>
-                println(s"  Result: $other")
+                println(s"  Result for Scala $version1 and $version2: $other")
             }
           }
         }

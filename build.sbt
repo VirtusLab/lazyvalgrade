@@ -25,7 +25,14 @@ lazy val testops = project
       "com.lihaoyi" %% "os-lib" % "0.11.3",
       "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-core" % "2.32.0",
       "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-macros" % "2.32.0" % Provided
-    )
+    ),
+    Compile / mainClass := Some("lazyvalgrade.CompileExamplesMain"),
+    assembly / mainClass := Some("lazyvalgrade.CompileExamplesMain"),
+    assembly / assemblyJarName := "lazyvalgrade-testops.jar",
+    assembly / assemblyMergeStrategy := {
+      case PathList("META-INF", xs @ _*) => MergeStrategy.discard
+      case x => MergeStrategy.first
+    }
   )
   .dependsOn(core)
 
@@ -67,5 +74,8 @@ lazy val cli = project
 
 lazy val root = project
   .in(file("."))
-  .settings(name := "lazyvalgrade")
+  .settings(
+    name := "lazyvalgrade",
+    addCommandAlias("compileExamples", "testops/runMain lazyvalgrade.CompileExamplesMain")
+  )
   .aggregate(core, testops, tests, cli)

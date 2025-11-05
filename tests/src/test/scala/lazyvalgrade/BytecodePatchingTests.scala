@@ -4,6 +4,7 @@ import munit.FunSuite
 import lazyvalgrade.classfile.ClassfileParser
 import lazyvalgrade.lazyval.{LazyValDetector, LazyValDetectionResult, ScalaVersion, SemanticLazyValComparator}
 import lazyvalgrade.patching.BytecodePatcher
+import lazyvalgrade.analysis.{LazyValAnalyzer, ClassfileGroup}
 import java.nio.file.{Files, Paths, Path}
 import scala.util.{Try, Using}
 import scala.collection.immutable.TreeSet
@@ -59,6 +60,13 @@ class BytecodePatchingTests extends FunSuite {
   )
 
   override def beforeAll(): Unit = {
+    // Configure scribe logging
+    scribe.Logger.root
+      .clearHandlers()
+      .clearModifiers()
+      .withHandler(minimumLevel = Some(scribe.Level.Warn))
+      .replace()
+
     // Verify Java version
     val javaVersionOutput = os.proc("java", "--version").call().out.text().trim
     val javaVersionLine = javaVersionOutput.linesIterator.toSeq.headOption.getOrElse("")
@@ -101,7 +109,7 @@ class BytecodePatchingTests extends FunSuite {
 
     println(s"Discovered ${discoveredExamples.size} examples: ${discoveredExamples.map(_.last).mkString(", ")}")
 
-    val runner = ExampleRunner(examplesDir, testWorkspace)
+    val runner = ExampleRunner(examplesDir, testWorkspace, quiet = true)
     val scalaVersions = testVersions.to(TreeSet)
 
     println(s"Compiling with Scala versions: ${scalaVersions.mkString(", ")}")
@@ -158,30 +166,75 @@ class BytecodePatchingTests extends FunSuite {
     }
   }
 
-  /** Patches a classfile and writes it to the mirrored location in patchedWorkspace. */
-  def patchAndWrite(classFile: Path, example: ExampleTest, version: String): Either[String, Path] = {
-    // Read original classfile
-    val bytes = Files.readAllBytes(classFile)
+  /** Patches all classfiles for a given example and version, handling companion pairs.
+    *
+    * @return
+    *   Map from original className to patched file paths
+    */
+  def patchAllClassFilesForVersion(example: ExampleTest, version: String): Either[String, Map[String, Seq[Path]]] = {
+    val versionResult = example.compilationResult.results.get(version)
+    if (versionResult.isEmpty || !versionResult.get.success) {
+      Left(s"Version $version not successfully compiled")
+    } else {
+      // Collect all classfiles for this version
+      val classFiles = versionResult.get.classFiles
 
-    // Patch it
-    BytecodePatcher.patch(bytes) match {
-      case BytecodePatcher.PatchResult.Patched(patchedBytes) =>
-        // Create mirrored directory structure
-        val relativePathStr = classFile.toString.split(s"/$version/").last
-        val relativePath = os.RelPath(relativePathStr)
-        val patchedPath = patchedWorkspace / example.name / version / relativePath
+      // Read all classfiles into memory with their class names
+      val classfileMap = classFiles.map { cf =>
+        val bytes = Files.readAllBytes(cf.absolutePath.toNIO)
+        val className = cf.relativePath.stripSuffix(".class").replace("/", ".")
+        (className, bytes)
+      }.toMap
 
-        os.makeDir.all(patchedPath / os.up)
-        os.write.over(patchedPath, patchedBytes)
+      // Group classfiles (detect companion pairs)
+      LazyValAnalyzer.group(classfileMap).flatMap { groups =>
+        // Patch each group
+        val resultMap = scala.collection.mutable.Map[String, Seq[Path]]()
+        var error: Option[String] = None
 
-        Right(patchedPath.toNIO)
+        groups.foreach { group =>
+          if (error.isEmpty) {
+            BytecodePatcher.patch(group) match {
+              case BytecodePatcher.PatchResult.PatchedSingle(name, bytes) =>
+                // Write single patched file
+                val patchedPath = writePatchedFile(name, bytes, example, version)
+                resultMap(name) = Seq(patchedPath)
 
-      case BytecodePatcher.PatchResult.NotApplicable =>
-        Left("Not applicable for patching")
+              case BytecodePatcher.PatchResult
+                    .PatchedPair(companionObjectName, className, companionObjectBytes, classBytes) =>
+                // Write both patched files
+                val objectPath = writePatchedFile(companionObjectName, companionObjectBytes, example, version)
+                val classPath = writePatchedFile(className, classBytes, example, version)
+                resultMap(companionObjectName) = Seq(objectPath, classPath)
+                resultMap(className) = Seq(objectPath, classPath)
 
-      case BytecodePatcher.PatchResult.Failed(error) =>
-        Left(s"Patching failed: $error")
+              case BytecodePatcher.PatchResult.NotApplicable =>
+                // Skip, no patching needed
+                ()
+
+              case BytecodePatcher.PatchResult.Failed(err) =>
+                error = Some(s"Patching failed for group ${group.primaryName}: $err")
+            }
+          }
+        }
+
+        error match {
+          case Some(err) => Left(err)
+          case None      => Right(resultMap.toMap)
+        }
+      }
     }
+  }
+
+  /** Writes a patched classfile to the workspace. */
+  private def writePatchedFile(className: String, bytes: Array[Byte], example: ExampleTest, version: String): Path = {
+    val relativePath = className.replace('.', '/') + ".class"
+    val patchedPath = patchedWorkspace / example.name / version / os.RelPath(relativePath)
+
+    os.makeDir.all(patchedPath / os.up)
+    os.write.over(patchedPath, bytes)
+
+    patchedPath.toNIO
   }
 
   /** Gets the full classpath for a compiled example (includes Scala library).
@@ -239,24 +292,19 @@ class BytecodePatchingTests extends FunSuite {
 
           val ref38Bytes = Files.readAllBytes(ref38File.get)
           val ref38ClassInfo = ClassfileParser.parse(ref38Bytes).toOption.get
-          val ref38LazyVals = LazyValDetector.detect(ref38ClassInfo) match {
-            case LazyValDetectionResult.LazyValsFound(lvs, _) => lvs
-            case _                                            => Seq.empty
-          }
 
           patchableVersions.foreach { version =>
-            // Find original classfile
-            findClassFile(example, version, className) match {
-              case Some(originalFile) =>
-                println(s"  Testing $version → 3.8 transformation for $className")
+            // Patch all classfiles for this version (handles companion pairs)
+            patchAllClassFilesForVersion(example, version) match {
+              case Right(patchedFilesMap) =>
+                // Look up patched files for this className
+                patchedFilesMap.get(className) match {
+                  case Some(patchedFiles) =>
+                    println(s"  Testing $version → 3.8 transformation for $className")
+                    println(s"    ✓ Patched successfully (${patchedFiles.size} file(s))")
 
-                // Patch it
-                patchAndWrite(originalFile, example, version) match {
-                  case Right(patchedFile) =>
-                    println(s"    ✓ Patched successfully")
-
-                    // Parse patched classfile
-                    val patchedBytes = Files.readAllBytes(patchedFile)
+                    // Parse the main patched classfile (first one for this className)
+                    val patchedBytes = Files.readAllBytes(patchedFiles.head)
                     val patchedClassInfo = ClassfileParser.parse(patchedBytes).toOption.get
 
                     // Semantic comparison with 3.8 reference
@@ -269,12 +317,12 @@ class BytecodePatchingTests extends FunSuite {
 
                     println(s"    ✓ Semantically identical to 3.8")
 
-                  case Left(error) =>
-                    fail(s"Failed to patch $className from $version: $error")
+                  case None =>
+                    println(s"  ⊘ Skipping $version (not patched)")
                 }
 
-              case None =>
-                println(s"  ⊘ Skipping $version (not compiled)")
+              case Left(error) =>
+                fail(s"Failed to patch $className from $version: $error")
             }
           }
         }
@@ -290,7 +338,7 @@ class BytecodePatchingTests extends FunSuite {
         println(s"\n[${example.name}] Testing runtime behavior")
 
         val expectedOutput = example.metadata.expectedOutput.get
-        val mainClassName = example.metadata.expectedClasses.head.className.stripSuffix("$")
+        val mainClassName = example.metadata.mainClassName
 
         // Test pre-patched versions (3.3-3.7) - should have Unsafe warning
         patchableVersions.foreach { version =>
@@ -324,38 +372,37 @@ class BytecodePatchingTests extends FunSuite {
 
         // Test patched versions (3.3-3.7 → 3.8) - should NOT have Unsafe warning
         patchableVersions.foreach { version =>
-          example.metadata.expectedClasses.filter(_.lazyVals.nonEmpty).foreach { expectedClass =>
-            val className = expectedClass.className
+          patchAllClassFilesForVersion(example, version) match {
+            case Right(patchedFilesMap) if patchedFilesMap.nonEmpty =>
+              println(s"  Testing patched $version runtime")
 
-            findClassFile(example, version, className).foreach { originalFile =>
-              patchAndWrite(originalFile, example, version) match {
-                case Right(patchedFile) =>
-                  println(s"  Testing patched $version runtime")
+              // Get the patched output directory (parent of first patched file)
+              val firstPatchedFile = patchedFilesMap.values.head.head
+              val outputDir = os.Path(firstPatchedFile.getParent)
+              val targetDir = testWorkspace / example.name / version
+              val scalaLibClasspath = getScalaCliClasspath(targetDir, version)
+              val (exitCode, stdout, stderr) = runWithJava(outputDir, scalaLibClasspath, mainClassName)
 
-                  val outputDir = os.Path(patchedFile.getParent)
-                  val targetDir = testWorkspace / example.name / version
-                  val scalaLibClasspath = getScalaCliClasspath(targetDir, version)
-                  val (exitCode, stdout, stderr) = runWithJava(outputDir, scalaLibClasspath, mainClassName)
+              // Verify correct output
+              assertEquals(
+                stdout,
+                expectedOutput,
+                s"Patched $version should produce correct output"
+              )
 
-                  // Verify correct output
-                  assertEquals(
-                    stdout,
-                    expectedOutput,
-                    s"Patched $version should produce correct output"
-                  )
+              // Verify NO Unsafe warning
+              assert(
+                !stderr.contains("sun.misc.Unsafe"),
+                s"Patched $version should NOT have Unsafe warning in stderr, but got: $stderr"
+              )
 
-                  // Verify NO Unsafe warning
-                  assert(
-                    !stderr.contains("sun.misc.Unsafe"),
-                    s"Patched $version should NOT have Unsafe warning in stderr, but got: $stderr"
-                  )
+              println(s"    ✓ Correct output and NO Unsafe warning")
 
-                  println(s"    ✓ Correct output and NO Unsafe warning")
+            case Left(error) =>
+              fail(s"Failed to patch for runtime testing: $error")
 
-                case Left(error) =>
-                  fail(s"Failed to patch for runtime testing: $error")
-              }
-            }
+            case Right(_) =>
+              println(s"  ⊘ No files patched for $version")
           }
         }
 
@@ -395,28 +442,38 @@ class BytecodePatchingTests extends FunSuite {
       if (example.metadata.expectedClasses.exists(_.lazyVals.nonEmpty)) {
         println(s"\n[${example.name}] Testing idempotency")
 
-        example.metadata.expectedClasses.filter(_.lazyVals.nonEmpty).foreach { expectedClass =>
-          val className = expectedClass.className
+        patchableVersions.headOption.foreach { version =>
+          patchAllClassFilesForVersion(example, version) match {
+            case Right(patchedFilesMap) if patchedFilesMap.nonEmpty =>
+              // Try patching the patched files again - read them back and group
+              val repatchClassfileMap = patchedFilesMap.flatMap { case (className, paths) =>
+                paths.map { path =>
+                  val bytes = Files.readAllBytes(path)
+                  (className, bytes)
+                }
+              }
 
-          patchableVersions.headOption.foreach { version =>
-            findClassFile(example, version, className).foreach { originalFile =>
-              patchAndWrite(originalFile, example, version) match {
-                case Right(patchedFile) =>
-                  // Try patching the patched file
-                  val patchedBytes = Files.readAllBytes(patchedFile)
+              LazyValAnalyzer.group(repatchClassfileMap) match {
+                case Right(groups) =>
+                  groups.foreach { group =>
+                    BytecodePatcher.patch(group) match {
+                      case BytecodePatcher.PatchResult.NotApplicable =>
+                        println(s"  ✓ Patched bytecode correctly returns NotApplicable for ${group.primaryName}")
 
-                  BytecodePatcher.patch(patchedBytes) match {
-                    case BytecodePatcher.PatchResult.NotApplicable =>
-                      println(s"  ✓ Patched bytecode correctly returns NotApplicable")
-
-                    case other =>
-                      fail(s"Patching already-patched bytecode should return NotApplicable, got: $other")
+                      case other =>
+                        fail(s"Patching already-patched bytecode should return NotApplicable, got: $other")
+                    }
                   }
 
                 case Left(error) =>
-                  fail(s"Failed initial patching: $error")
+                  fail(s"Failed to group patched files: $error")
               }
-            }
+
+            case Left(error) =>
+              fail(s"Failed initial patching: $error")
+
+            case Right(_) =>
+              println(s"  ⊘ No files to test idempotency")
           }
         }
       }
@@ -431,19 +488,31 @@ class BytecodePatchingTests extends FunSuite {
       if (example.metadata.expectedClasses.exists(_.lazyVals.nonEmpty)) {
         println(s"\n[${example.name}] Testing non-patchable versions")
 
-        example.metadata.expectedClasses.filter(_.lazyVals.nonEmpty).foreach { expectedClass =>
-          val className = expectedClass.className
+        nonPatchableVersions.foreach { version =>
+          example.compilationResult.results.get(version).foreach { versionResult =>
+            if (versionResult.success) {
+              // Read all classfiles for this version
+              val classfileMap = versionResult.classFiles.map { cf =>
+                val bytes = Files.readAllBytes(cf.absolutePath.toNIO)
+                val className = cf.relativePath.stripSuffix(".class").replace("/", ".")
+                (className, bytes)
+              }.toMap
 
-          nonPatchableVersions.foreach { version =>
-            findClassFile(example, version, className).foreach { classFile =>
-              val bytes = Files.readAllBytes(classFile)
+              // Group and patch
+              LazyValAnalyzer.group(classfileMap) match {
+                case Right(groups) =>
+                  groups.foreach { group =>
+                    BytecodePatcher.patch(group) match {
+                      case BytecodePatcher.PatchResult.NotApplicable =>
+                        println(s"  ✓ $version correctly returns NotApplicable for ${group.primaryName}")
 
-              BytecodePatcher.patch(bytes) match {
-                case BytecodePatcher.PatchResult.NotApplicable =>
-                  println(s"  ✓ $version correctly returns NotApplicable")
+                      case other =>
+                        fail(s"$version should return NotApplicable, got: $other")
+                    }
+                  }
 
-                case other =>
-                  fail(s"$version should return NotApplicable, got: $other")
+                case Left(error) =>
+                  fail(s"Failed to group classfiles for $version: $error")
               }
             }
           }
