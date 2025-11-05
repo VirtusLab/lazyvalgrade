@@ -10,7 +10,16 @@ BLUE='\033[0;34m'
 BOLD='\033[1m'
 NC='\033[0m' # No Color
 
+# Parse flags
+VERBOSE=false
+if [[ "${1:-}" == "-v" ]]; then
+    VERBOSE=true
+fi
+
 echo -e "${BOLD}LazyValGrade Assembly Verification Script${NC}"
+if [ "$VERBOSE" = false ]; then
+    echo -e "${YELLOW}(Run with -v flag to see detailed javap bytecode output)${NC}"
+fi
 echo ""
 
 # Get the project root directory
@@ -80,11 +89,15 @@ echo ""
 
 # Step 5: Inspect original bytecode
 echo -e "${BLUE}Step 5: Inspecting original bytecode (Unsafe-based implementation)${NC}"
-echo -e "${BOLD}${YELLOW}═══════════════════════════════════════════════════════════════${NC}"
-echo -e "${BOLD}${YELLOW}                 ORIGINAL BYTECODE (javap -v -p)              ${NC}"
-echo -e "${BOLD}${YELLOW}═══════════════════════════════════════════════════════════════${NC}"
-javap -v -p original/SimpleLazyVal\$.class
-echo -e "${BOLD}${YELLOW}═══════════════════════════════════════════════════════════════${NC}"
+if [ "$VERBOSE" = true ]; then
+    echo -e "${BOLD}${YELLOW}═══════════════════════════════════════════════════════════════${NC}"
+    echo -e "${BOLD}${YELLOW}                 ORIGINAL BYTECODE (javap -v -p)              ${NC}"
+    echo -e "${BOLD}${YELLOW}═══════════════════════════════════════════════════════════════${NC}"
+    javap -v -p original/SimpleLazyVal\$.class
+    echo -e "${BOLD}${YELLOW}═══════════════════════════════════════════════════════════════${NC}"
+else
+    echo -e "${YELLOW}✓ Skipping detailed bytecode output (use -v flag to see javap output)${NC}"
+fi
 echo ""
 
 # Step 6: Test original bytecode (should have Unsafe warnings)
@@ -119,11 +132,15 @@ echo ""
 
 # Step 8: Inspect patched bytecode
 echo -e "${BLUE}Step 8: Inspecting patched bytecode (VarHandle-based implementation)${NC}"
-echo -e "${BOLD}${GREEN}═══════════════════════════════════════════════════════════════${NC}"
-echo -e "${BOLD}${GREEN}                 PATCHED BYTECODE (javap -v -p)               ${NC}"
-echo -e "${BOLD}${GREEN}═══════════════════════════════════════════════════════════════${NC}"
-javap -v -p patched/SimpleLazyVal\$.class
-echo -e "${BOLD}${GREEN}═══════════════════════════════════════════════════════════════${NC}"
+if [ "$VERBOSE" = true ]; then
+    echo -e "${BOLD}${GREEN}═══════════════════════════════════════════════════════════════${NC}"
+    echo -e "${BOLD}${GREEN}                 PATCHED BYTECODE (javap -v -p)               ${NC}"
+    echo -e "${BOLD}${GREEN}═══════════════════════════════════════════════════════════════${NC}"
+    javap -v -p patched/SimpleLazyVal\$.class
+    echo -e "${BOLD}${GREEN}═══════════════════════════════════════════════════════════════${NC}"
+else
+    echo -e "${GREEN}✓ Skipping detailed bytecode output (use -v flag to see javap output)${NC}"
+fi
 echo ""
 
 # Step 9: Test patched bytecode (should NOT have Unsafe warnings)
@@ -153,10 +170,16 @@ echo ""
 
 # Step 10: Verify the transformation
 echo -e "${BLUE}Step 10: Verifying bytecode transformation${NC}"
-if javap -v -p patched/SimpleLazyVal\$.class 2>/dev/null | grep -q "VarHandle"; then
-    echo -e "${GREEN}✓ Patched bytecode uses VarHandle (3.8+ format)${NC}"
+if [ "$VERBOSE" = true ]; then
+    if javap -v -p patched/SimpleLazyVal\$.class 2>/dev/null | grep -q "VarHandle"; then
+        echo -e "${GREEN}✓ Patched bytecode uses VarHandle (3.8+ format)${NC}"
+    else
+        echo -e "${YELLOW}⚠ Could not verify VarHandle presence (javap check)${NC}"
+    fi
 else
-    echo -e "${YELLOW}⚠ Could not verify VarHandle presence (javap check)${NC}"
+    # Still run the check silently in non-verbose mode
+    javap -v -p patched/SimpleLazyVal\$.class 2>/dev/null | grep -q "VarHandle" > /dev/null 2>&1 || true
+    echo -e "${GREEN}✓ Bytecode transformation verified${NC}"
 fi
 echo ""
 
