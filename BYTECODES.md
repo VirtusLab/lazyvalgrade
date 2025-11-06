@@ -1248,6 +1248,24 @@ For classes with multiple lazy vals:
 - Each `<name>$lzyINIT<N>()` method must be transformed independently
 - Pattern matching must extract the index `<N>` to correlate fields and methods
 
+**Important: Lazy Val Index Convention**
+
+All lazy vals in a single class/object share the **same index** (typically 1):
+```scala
+object MultipleLazyVals:
+  lazy val first: String = "one"     // index=1
+  lazy val second: Int = 42          // index=1
+  lazy val third: Double = 3.14      // index=1
+  lazy val fourth: Boolean = true    // index=1
+```
+
+This means:
+- Storage fields: `first$lzy1`, `second$lzy1`, `third$lzy1`, `fourth$lzy1`
+- OFFSET fields: `OFFSET$_m_0`, `OFFSET$_m_1`, `OFFSET$_m_2`, `OFFSET$_m_3` (one per lazy val)
+- VarHandle fields: `first$lzy1$lzyHandle`, `second$lzy1$lzyHandle`, etc.
+
+The index in the storage field name (`$lzy1`) is NOT unique per lazy val - it's constant for all lazy vals in the class. The OFFSET field index (`$_m_N`) is what distinguishes different lazy vals, where N = lazy val index - 1 (so N=0 for index=1).
+
 ## Testing Strategy
 
 For each Scala version (3.0.x, 3.1.x, 3.2.x, 3.3-3.7.x):

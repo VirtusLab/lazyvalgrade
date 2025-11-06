@@ -16,8 +16,18 @@ import scala.collection.immutable.TreeSet
   *   - 3.2 vs 3.3: DIFFERENT (bitmap-based vs object-based)
   *   - 3.3 vs 3.7: IDENTICAL (both use object-based with Unsafe)
   *   - 3.7 vs 3.8: DIFFERENT (Unsafe vs VarHandle)
+  *
+  * Use SELECT_EXAMPLE environment variable to filter examples:
+  *   - SELECT_EXAMPLE=simple-lazy-val (single example)
+  *   - SELECT_EXAMPLE=simple-lazy-val,class-lazy-val (multiple examples)
   */
-class SemanticLazyValComparisonTests extends FunSuite {
+class SemanticLazyValComparisonTests extends FunSuite with ExampleLoader {
+
+  // ===== ExampleLoader implementation =====
+
+  override val examplesDir: os.Path = os.pwd / "tests" / "src" / "test" / "resources" / "fixtures" / "examples"
+  override val testWorkspace: os.Path = os.temp.dir(prefix = "lazyvalgrade-semantic-tests-", deleteOnExit = false)
+  override val quietCompilation: Boolean = true
 
   /** Test version pairs with expected comparison results */
   val versionPairs: Seq[(String, String, Boolean)] = Seq(
@@ -50,63 +60,19 @@ class SemanticLazyValComparisonTests extends FunSuite {
     ("3.7.3", "3.8.0-RC1-bin-20251026-5c51b7b-NIGHTLY", false) // Different: Unsafe vs VarHandle
   )
 
-  /** All discovered examples with their test data */
-  lazy val examples: Seq[ExampleTest] = {
-    // Set up paths
-    val fixturesDir = os.pwd / "tests" / "src" / "test" / "resources" / "fixtures"
-    val examplesDir = fixturesDir / "examples"
-    val testWorkspace = os.temp.dir(prefix = "lazyvalgrade-semantic-tests-", deleteOnExit = false)
+  override def requiredScalaVersions: Seq[String] =
+    (versionPairs.flatMap { case (v1, v2, _) => Seq(v1, v2) }).distinct
 
+  // ===== Loaded examples =====
+
+  /** All loaded examples with their test data (respects SELECT_EXAMPLE filter) */
+  lazy val examples: Seq[LoadedExample] = {
     println(s"Semantic comparison test workspace: $testWorkspace")
-
-    // Discover examples
-    val discoveredExamples = os.list(examplesDir).filter(os.isDir).toSeq
-
-    // Collect all versions needed
-    val allVersions = (versionPairs.flatMap { case (v1, v2, _) => Seq(v1, v2) }).distinct.to(TreeSet)
-    println(s"Compiling with Scala versions: ${allVersions.mkString(", ")}")
-
-    // Create runner and compile
-    val runner = ExampleRunner(examplesDir, testWorkspace, quiet = true)
-
-    val loadedExamples = discoveredExamples.flatMap { examplePath =>
-      val exampleName = examplePath.last
-
-      ExampleMetadata.load(examplePath) match {
-        case Left(error) =>
-          throw new RuntimeException(s"Failed to load metadata for example '$exampleName': $error")
-
-        case Right(metadata) =>
-          runner.compileExample(examplePath, allVersions) match {
-            case Right(compilationResult) =>
-              val successful = compilationResult.successfulResults.size
-              val total = compilationResult.results.size
-              println(s"Example '$exampleName': $successful/$total versions compiled")
-              Some(ExampleTest(exampleName, examplePath, metadata, compilationResult))
-
-            case Left(error) =>
-              throw new RuntimeException(s"Failed to compile example '$exampleName': $error")
-          }
-      }
-    }
-
-    if (loadedExamples.isEmpty) {
-      throw new RuntimeException("No examples found for semantic comparison testing")
-    }
-
-    loadedExamples
+    loadSelectedExamples()
   }
 
-  /** Example with its metadata and compilation results */
-  case class ExampleTest(
-      name: String,
-      path: os.Path,
-      metadata: ExampleMetadata,
-      compilationResult: ExampleCompilationResult
-  )
-
   /** Finds a compiled classfile for a specific example, Scala version, and class name. */
-  def findClassFile(example: ExampleTest, scalaVersion: String, className: String): Option[Path] = {
+  def findClassFile(example: LoadedExample, scalaVersion: String, className: String): Option[Path] = {
     example.compilationResult.results.get(scalaVersion).flatMap { versionResult =>
       versionResult.classFiles
         .find(_.relativePath.endsWith(s"$className.class"))
@@ -205,8 +171,16 @@ class SemanticLazyValComparisonTests extends FunSuite {
 
   // Additional edge case tests
   test("No lazy vals: should be trivially identical") {
-    val example = examples.find(_.metadata.expectedClasses.exists(_.lazyVals.isEmpty)).getOrElse {
-      throw new RuntimeException("No example with no lazy vals found")
+    // Use discoveredExamples to find the no-lazy-val example without triggering compilation
+    val noLazyValDiscovered = discoveredExamples.find(_.metadata.expectedClasses.exists(_.lazyVals.isEmpty))
+
+    if (noLazyValDiscovered.isEmpty) {
+      throw new RuntimeException("No example with no lazy vals found in metadata")
+    }
+
+    // Load only the no-lazy-val example
+    val example = loadExample(noLazyValDiscovered.get.name).getOrElse {
+      throw new RuntimeException(s"Failed to compile example '${noLazyValDiscovered.get.name}'")
     }
 
     // Find or create a class without lazy vals

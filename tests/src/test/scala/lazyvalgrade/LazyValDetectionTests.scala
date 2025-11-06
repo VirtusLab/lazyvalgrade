@@ -11,8 +11,18 @@ import scala.collection.immutable.TreeSet
   *
   * Discovers and compiles test fixtures using ExampleRunner, then verifies that the correct lazy val implementation is
   * detected based on metadata.json files in each example.
+  *
+  * Use SELECT_EXAMPLE environment variable to filter examples:
+  *   - SELECT_EXAMPLE=simple-lazy-val (single example)
+  *   - SELECT_EXAMPLE=simple-lazy-val,class-lazy-val (multiple examples)
   */
-class LazyValDetectionTests extends FunSuite {
+class LazyValDetectionTests extends FunSuite with ExampleLoader {
+
+  // ===== ExampleLoader implementation =====
+
+  override val examplesDir: os.Path = os.pwd / "tests" / "src" / "test" / "resources" / "fixtures" / "examples"
+  override val testWorkspace: os.Path = os.temp.dir(prefix = "lazyvalgrade-tests-", deleteOnExit = true)
+  override val quietCompilation: Boolean = true
 
   /** Scala versions to test with their expected lazy val implementations */
   val testVersions: Seq[(String, ScalaVersion)] = Seq(
@@ -28,88 +38,22 @@ class LazyValDetectionTests extends FunSuite {
     ("3.8.0-RC1-bin-20251026-5c51b7b-NIGHTLY", ScalaVersion.Scala38Plus)
   )
 
-  /** Example with its metadata and compilation results */
-  case class ExampleTest(
-      name: String,
-      path: os.Path,
-      metadata: ExampleMetadata,
-      compilationResult: ExampleCompilationResult
-  )
-
-  /** Temporary workspace for test compilations */
-  val testWorkspace: os.Path = os.temp.dir(prefix = "lazyvalgrade-tests-", deleteOnExit = true)
+  override def requiredScalaVersions: Seq[String] = testVersions.map(_._1)
 
   val cleanupWorkspace: Boolean = true
 
   /** All discovered examples with their test data - loaded during class initialization */
-  lazy val examples: Seq[ExampleTest] = {
-    // Set up paths
+  lazy val examples: Seq[LoadedExample] = {
     val fixturesDir = os.pwd / "tests" / "src" / "test" / "resources" / "fixtures"
-    val examplesDir = fixturesDir / "examples"
-
     println(s"Fixtures directory: $fixturesDir")
     println(s"Examples directory: $examplesDir")
     println(s"Test workspace: $testWorkspace")
 
-    // Discover all examples (directories in examples/)
-    if (!os.exists(examplesDir)) {
-      throw new RuntimeException(s"Examples directory does not exist: $examplesDir")
-    }
+    println(s"Discovered ${discoveredExamples.size} examples: ${discoveredExamples.map(_.name).mkString(", ")}")
 
-    val discoveredExamples = os
-      .list(examplesDir)
-      .filter(os.isDir)
-      .toSeq
-
-    println(s"Discovered ${discoveredExamples.size} examples: ${discoveredExamples.map(_.last).mkString(", ")}")
-
-    // Create ExampleRunner
-    val runner = ExampleRunner(examplesDir, testWorkspace, quiet = true)
-
-    // Compile all examples with all test versions
-    val scalaVersions = testVersions.map(_._1).to(TreeSet)
-    println(s"Compiling with Scala versions: ${scalaVersions.mkString(", ")}")
-
-    val loadedExamples = discoveredExamples.flatMap { examplePath =>
-      val exampleName = examplePath.last
-
-      // Load metadata
-      ExampleMetadata.load(examplePath) match {
-        case Left(error) =>
-          println(s"Warning: Skipping example '$exampleName': $error")
-          None
-
-        case Right(metadata) =>
-          println(s"Loading example '$exampleName': ${metadata.description}")
-
-          // Compile the example
-          runner.compileExample(examplePath, scalaVersions) match {
-            case Right(compilationResult) =>
-              val successful = compilationResult.successfulResults.size
-              val total = compilationResult.results.size
-              println(s"  Compilation: $successful/$total versions succeeded")
-
-              // Print details about failed compilations
-              compilationResult.results.foreach { case (version, versionResult) =>
-                if !versionResult.success then
-                  println(s"    ✗ Scala $version failed: ${versionResult.error.getOrElse("unknown error")}")
-              }
-
-              Some(ExampleTest(exampleName, examplePath, metadata, compilationResult))
-
-            case Left(error) =>
-              println(s"Warning: Failed to compile example '$exampleName': $error")
-              None
-          }
-      }
-    }
-
-    if (loadedExamples.isEmpty) {
-      throw new RuntimeException("No valid examples found with metadata.json files")
-    }
-
-    println(s"Loaded ${loadedExamples.size} examples for testing")
-    loadedExamples
+    val loaded = loadSelectedExamples()
+    println(s"Loaded ${loaded.size} examples for testing")
+    loaded
   }
 
   override def afterAll(): Unit = {
@@ -130,7 +74,7 @@ class LazyValDetectionTests extends FunSuite {
     * @return
     *   Path to the classfile if found
     */
-  def findClassFile(example: ExampleTest, scalaVersion: String, className: String): Option[Path] = {
+  def findClassFile(example: LoadedExample, scalaVersion: String, className: String): Option[Path] = {
     example.compilationResult.results.get(scalaVersion).flatMap { versionResult =>
       versionResult.classFiles
         .find(_.relativePath.endsWith(s"$className.class"))
@@ -200,6 +144,12 @@ class LazyValDetectionTests extends FunSuite {
                   s"Expected ${expectedClass.lazyVals.size} lazy val(s) but found ${lazyVals.size}"
                 )
 
+                // IMPORTANT: Tests should never detect Unknown version since we compile with known Scala 3 versions
+                assert(
+                  version != ScalaVersion.Unknown,
+                  s"Detected Unknown version for known Scala $scalaVersion - this indicates a bug in detection logic. LazyVals: ${lazyVals.map(lv => s"${lv.name} (version=${lv.version})").mkString(", ")}"
+                )
+
                 // Check version detection
                 assertEquals(version, expectedVersion, s"Expected $expectedVersion but detected $version")
 
@@ -267,7 +217,8 @@ class LazyValDetectionTests extends FunSuite {
                 }
 
               case LazyValDetectionResult.MixedVersions(lazyVals) =>
-                fail(s"Unexpected mixed versions: ${lazyVals.map(_.version).distinct}")
+                val versionBreakdown = lazyVals.groupBy(_.version).map { case (v, lvs) => s"$v: ${lvs.map(_.name).mkString(", ")}" }.mkString("; ")
+                fail(s"Unexpected mixed versions for known Scala $scalaVersion - this indicates a bug in detection logic. Breakdown: $versionBreakdown")
             }
           }
         }

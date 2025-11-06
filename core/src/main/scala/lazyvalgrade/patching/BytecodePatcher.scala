@@ -307,15 +307,18 @@ object BytecodePatcher {
         field.name match {
           case companionPattern(idx) =>
             val offsetIndex = idx.toInt
-            val lazyValIndex = offsetIndex + 1 // Lazy val index is offset index + 1
-            lazyVals.find(_.index == lazyValIndex).foreach { lv =>
+            // IMPORTANT: OFFSET$_m_N maps to the Nth lazy val (0-indexed), NOT by lazy val index
+            // All lazy vals in a class have the same index (typically 1), so we map by position
+            if (offsetIndex < lazyVals.size) {
+              val lv = lazyVals(offsetIndex)
               val varHandleName = s"${lv.name}$$lzy${lv.index}$$lzyHandle"
               offsetToVarHandle(field.name) = varHandleName
             }
           case standalonePattern(idx) =>
             val offsetIndex = idx.toInt
-            val lazyValIndex = offsetIndex + 1 // Lazy val index is offset index + 1
-            lazyVals.find(_.index == lazyValIndex).foreach { lv =>
+            // IMPORTANT: OFFSET$N maps to the Nth lazy val (0-indexed), NOT by lazy val index
+            if (offsetIndex < lazyVals.size) {
+              val lv = lazyVals(offsetIndex)
               val varHandleName = s"${lv.name}$$lzy${lv.index}$$lzyHandle"
               offsetToVarHandle(field.name) = varHandleName
             }
@@ -619,15 +622,17 @@ object BytecodePatcher {
         field.name match {
           case companionPattern(idx) =>
             val offsetIndex = idx.toInt
-            val lazyValIndex = offsetIndex + 1
-            lazyVals.find(_.index == lazyValIndex).foreach { lv =>
+            // IMPORTANT: OFFSET$_m_N maps to the Nth lazy val (0-indexed), NOT by lazy val index
+            if (offsetIndex < lazyVals.size) {
+              val lv = lazyVals(offsetIndex)
               val varHandleName = s"${lv.name}$$lzy${lv.index}$$lzyHandle"
               offsetToVarHandle(field.name) = varHandleName
             }
           case standalonePattern(idx) =>
             val offsetIndex = idx.toInt
-            val lazyValIndex = offsetIndex + 1
-            lazyVals.find(_.index == lazyValIndex).foreach { lv =>
+            // IMPORTANT: OFFSET$N maps to the Nth lazy val (0-indexed), NOT by lazy val index
+            if (offsetIndex < lazyVals.size) {
+              val lv = lazyVals(offsetIndex)
               val varHandleName = s"${lv.name}$$lzy${lv.index}$$lzyHandle"
               offsetToVarHandle(field.name) = varHandleName
             }

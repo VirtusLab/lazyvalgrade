@@ -119,7 +119,12 @@ object Main {
           os.write.over(filePath, bytes)
           PatchGroupResult.Patched(1)
 
-        case BytecodePatcher.PatchResult.PatchedPair(companionObjectName, className, companionObjectBytes, classBytes) =>
+        case BytecodePatcher.PatchResult.PatchedPair(
+              companionObjectName,
+              className,
+              companionObjectBytes,
+              classBytes
+            ) =>
           // Write back both files
           val objectPath = targetDir / s"${companionObjectName.replace('.', '/')}.class"
           val classPath = targetDir / s"${className.replace('.', '/')}.class"
@@ -158,22 +163,24 @@ object Main {
   /** Computes summary statistics */
   private def computeSummary(results: Seq[(String, PatchGroupResult)]): PatchSummary = {
     val totalGroups = results.size
-    val totalFiles = results.map(_._2 match {
-      case PatchGroupResult.Patched(count) => count
-      case _ => 0
-    }).sum + results.count(_._2 == PatchGroupResult.NotApplicable)
+    val totalFiles = results
+      .map(_._2 match {
+        case PatchGroupResult.Patched(count) => count
+        case _                               => 0
+      })
+      .sum + results.count(_._2 == PatchGroupResult.NotApplicable)
 
     val patchedGroups = results.count {
       case (_, PatchGroupResult.Patched(_)) => true
-      case _ => false
+      case _                                => false
     }
-    val patchedFiles = results.collect {
-      case (_, PatchGroupResult.Patched(count)) => count
+    val patchedFiles = results.collect { case (_, PatchGroupResult.Patched(count)) =>
+      count
     }.sum
     val notApplicable = results.count(_._2 == PatchGroupResult.NotApplicable)
     val failed = results.count {
       case (_, PatchGroupResult.Failed(_)) => true
-      case _ => false
+      case _                               => false
     }
 
     PatchSummary(totalGroups, totalFiles, patchedGroups, patchedFiles, notApplicable, failed)

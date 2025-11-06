@@ -84,6 +84,57 @@ sbt "tests/testOnly lazyvalgrade.LazyValDetectionTests"
 sbt "tests/testOnly lazyvalgrade.LazyValDetectionTests -- *companion-object-lazy-val*"
 ```
 
+### Filtering Examples
+
+All test suites support filtering examples using the `SELECT_EXAMPLE` environment variable:
+
+```bash
+# Run tests for a single example
+SELECT_EXAMPLE=simple-lazy-val sbt test
+
+# Run tests for multiple examples (comma-separated)
+SELECT_EXAMPLE=simple-lazy-val,class-lazy-val sbt test
+
+# Run specific test suite with filtering
+SELECT_EXAMPLE=companion-object-lazy-val sbt "tests/testOnly lazyvalgrade.BytecodePatchingTests"
+
+# Without SELECT_EXAMPLE, all examples are tested (default behavior)
+sbt test
+```
+
+### Filtering Examples
+
+All test suites support filtering examples using the `SELECT_EXAMPLE` environment variable:
+
+```bash
+# Run tests for a single example
+SELECT_EXAMPLE=simple-lazy-val sbt test
+
+# Run tests for multiple examples (comma-separated)
+SELECT_EXAMPLE=simple-lazy-val,class-lazy-val sbt test
+
+# Run specific test suite with filtering
+SELECT_EXAMPLE=companion-object-lazy-val sbt "tests/testOnly lazyvalgrade.BytecodePatchingTests"
+
+# Without SELECT_EXAMPLE, all examples are tested (default behavior)
+sbt test
+```
+
+**Available examples:**
+- `simple-lazy-val` - Basic lazy val in object
+- `class-lazy-val` - Lazy val in class
+- `companion-object-lazy-val` - Lazy val in companion object
+- `companion-class-lazy-val` - Lazy val in companion class
+- `multiple-lazy-vals` - Multiple lazy vals in single object
+- `abstract-class-lazy-val` - Lazy val in abstract class
+- `trait-class-lazy-val` - Lazy val in trait
+- `no-lazy-val` - Control case with no lazy vals
+
+**Use cases:**
+- Faster iteration when working on specific examples
+- Debugging issues in particular test cases
+- CI optimization by parallelizing example tests
+
 ## Building
 
 ```bash

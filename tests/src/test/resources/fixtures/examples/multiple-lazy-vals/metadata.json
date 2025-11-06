@@ -1,0 +1,28 @@
+{
+  "description": "Multiple lazy vals in a single object to test bitmap/offset indexing",
+  "mainClassName": "main",
+  "expectedClasses": [
+    {
+      "className": "MultipleLazyVals$",
+      "lazyVals": [
+        {
+          "name": "first",
+          "index": 1
+        },
+        {
+          "name": "second",
+          "index": 1
+        },
+        {
+          "name": "third",
+          "index": 1
+        },
+        {
+          "name": "fourth",
+          "index": 1
+        }
+      ]
+    }
+  ],
+  "expectedOutput": "one, 42, 3.14, true"
+}

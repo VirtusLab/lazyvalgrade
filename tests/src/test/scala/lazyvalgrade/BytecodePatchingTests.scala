@@ -14,11 +14,21 @@ import scala.collection.immutable.TreeSet
   * Tests the complete patching pipeline:
   *   1. Compile examples with multiple Scala versions (3.0-3.8) 2. Patch 3.3-3.7 bytecode to 3.8 format 3. Semantically
   *      compare patched versions with real 3.8 4. Runtime testing: verify Unsafe warnings and correct output
+  *
+  * Use SELECT_EXAMPLE environment variable to filter examples:
+  *   - SELECT_EXAMPLE=simple-lazy-val (single example)
+  *   - SELECT_EXAMPLE=simple-lazy-val,class-lazy-val (multiple examples)
   */
-class BytecodePatchingTests extends FunSuite {
+class BytecodePatchingTests extends FunSuite with ExampleLoader {
 
   // Increase timeout for tests that compile multiple Scala versions
   override val munitTimeout = scala.concurrent.duration.Duration(180, "s")
+
+  // ===== ExampleLoader implementation =====
+
+  override val examplesDir: os.Path = os.pwd / "tests" / "src" / "test" / "resources" / "fixtures" / "examples"
+  override val testWorkspace: os.Path = os.temp.dir(prefix = "lazyvalgrade-patching-tests-", deleteOnExit = false)
+  override val quietCompilation: Boolean = true
 
   /** Scala versions for testing */
   val testVersions: Seq[String] = Seq(
@@ -30,6 +40,8 @@ class BytecodePatchingTests extends FunSuite {
     "3.7.3",
     "3.8.0-RC1-bin-20251026-5c51b7b-NIGHTLY"
   )
+
+  override def requiredScalaVersions: Seq[String] = testVersions
 
   /** Versions that need patching (3.3-3.7) */
   val patchableVersions: Set[String] = Set(
@@ -44,20 +56,10 @@ class BytecodePatchingTests extends FunSuite {
   /** Target version (3.8) */
   val targetVersion: String = "3.8.0-RC1-bin-20251026-5c51b7b-NIGHTLY"
 
-  /** Temporary workspace for test compilations */
-  val testWorkspace: os.Path = os.temp.dir(prefix = "lazyvalgrade-patching-tests-", deleteOnExit = false)
-
   /** Patched workspace for transformed classfiles */
   val patchedWorkspace: os.Path = testWorkspace / "patched"
 
   val cleanupWorkspace: Boolean = false
-
-  case class ExampleTest(
-      name: String,
-      path: os.Path,
-      metadata: ExampleMetadata,
-      compilationResult: ExampleCompilationResult
-  )
 
   override def beforeAll(): Unit = {
     // Configure scribe logging
@@ -90,9 +92,8 @@ class BytecodePatchingTests extends FunSuite {
   }
 
   /** Load and compile all examples */
-  lazy val examples: Seq[ExampleTest] = {
+  lazy val examples: Seq[LoadedExample] = {
     val fixturesDir = os.pwd / "tests" / "src" / "test" / "resources" / "fixtures"
-    val examplesDir = fixturesDir / "examples"
 
     println(s"Fixtures directory: $fixturesDir")
     println(s"Examples directory: $examplesDir")
@@ -101,56 +102,11 @@ class BytecodePatchingTests extends FunSuite {
 
     os.makeDir.all(patchedWorkspace)
 
-    if (!os.exists(examplesDir)) {
-      throw new RuntimeException(s"Examples directory does not exist: $examplesDir")
-    }
+    println(s"Discovered ${discoveredExamples.size} examples: ${discoveredExamples.map(_.name).mkString(", ")}")
 
-    val discoveredExamples = os.list(examplesDir).filter(os.isDir).toSeq
-
-    println(s"Discovered ${discoveredExamples.size} examples: ${discoveredExamples.map(_.last).mkString(", ")}")
-
-    val runner = ExampleRunner(examplesDir, testWorkspace, quiet = true)
-    val scalaVersions = testVersions.to(TreeSet)
-
-    println(s"Compiling with Scala versions: ${scalaVersions.mkString(", ")}")
-
-    val loadedExamples = discoveredExamples.flatMap { examplePath =>
-      val exampleName = examplePath.last
-
-      ExampleMetadata.load(examplePath) match {
-        case Left(error) =>
-          println(s"Warning: Skipping example '$exampleName': $error")
-          None
-
-        case Right(metadata) =>
-          println(s"Loading example '$exampleName': ${metadata.description}")
-
-          runner.compileExample(examplePath, scalaVersions) match {
-            case Right(compilationResult) =>
-              val successful = compilationResult.successfulResults.size
-              val total = compilationResult.results.size
-              println(s"  Compilation: $successful/$total versions succeeded")
-
-              compilationResult.results.foreach { case (version, versionResult) =>
-                if !versionResult.success then
-                  println(s"    ✗ Scala $version failed: ${versionResult.error.getOrElse("unknown error")}")
-              }
-
-              Some(ExampleTest(exampleName, examplePath, metadata, compilationResult))
-
-            case Left(error) =>
-              println(s"Warning: Failed to compile example '$exampleName': $error")
-              None
-          }
-      }
-    }
-
-    if (loadedExamples.isEmpty) {
-      throw new RuntimeException("No valid examples found with metadata.json files")
-    }
-
-    println(s"Loaded ${loadedExamples.size} examples for testing")
-    loadedExamples
+    val loaded = loadSelectedExamples()
+    println(s"Loaded ${loaded.size} examples for testing")
+    loaded
   }
 
   override def afterAll(): Unit = {
@@ -160,7 +116,7 @@ class BytecodePatchingTests extends FunSuite {
   }
 
   /** Finds a compiled classfile for a specific example, Scala version, and class name. */
-  def findClassFile(example: ExampleTest, scalaVersion: String, className: String): Option[Path] = {
+  def findClassFile(example: LoadedExample, scalaVersion: String, className: String): Option[Path] = {
     example.compilationResult.results.get(scalaVersion).flatMap { versionResult =>
       versionResult.classFiles.find(_.relativePath.endsWith(s"$className.class")).map(_.absolutePath.toNIO)
     }
@@ -171,7 +127,7 @@ class BytecodePatchingTests extends FunSuite {
     * @return
     *   Map from original className to patched file paths
     */
-  def patchAllClassFilesForVersion(example: ExampleTest, version: String): Either[String, Map[String, Seq[Path]]] = {
+  def patchAllClassFilesForVersion(example: LoadedExample, version: String): Either[String, Map[String, Seq[Path]]] = {
     val versionResult = example.compilationResult.results.get(version)
     if (versionResult.isEmpty || !versionResult.get.success) {
       Left(s"Version $version not successfully compiled")
@@ -188,6 +144,26 @@ class BytecodePatchingTests extends FunSuite {
 
       // Group classfiles (detect companion pairs)
       LazyValAnalyzer.group(classfileMap).flatMap { groups =>
+        // Validate that we can detect versions for all groups (no Unknown or MixedVersions in tests)
+        groups.foreach { group =>
+          val detectionResult = group match {
+            case ClassfileGroup.Single(name, classInfo, _) =>
+              LazyValDetector.detect(classInfo, None)
+            case ClassfileGroup.CompanionPair(_, _, companionObjectInfo, classInfo, _, _) =>
+              LazyValDetector.detect(companionObjectInfo, Some(classInfo))
+          }
+
+          detectionResult match {
+            case LazyValDetectionResult.NoLazyVals => // OK
+            case LazyValDetectionResult.LazyValsFound(lazyVals, ScalaVersion.Unknown) =>
+              return Left(s"Detected Unknown version for ${group.primaryName} compiled with Scala $version. LazyVals: ${lazyVals.map(lv => s"${lv.name} (version=${lv.version})").mkString(", ")}")
+            case LazyValDetectionResult.LazyValsFound(_, _) => // OK
+            case LazyValDetectionResult.MixedVersions(lazyVals) =>
+              val versionBreakdown = lazyVals.groupBy(_.version).map { case (v, lvs) => s"$v: ${lvs.map(_.name).mkString(", ")}" }.mkString("; ")
+              return Left(s"Detected mixed versions for ${group.primaryName} compiled with Scala $version. Breakdown: $versionBreakdown")
+          }
+        }
+
         // Patch each group
         val resultMap = scala.collection.mutable.Map[String, Seq[Path]]()
         var error: Option[String] = None
@@ -227,7 +203,7 @@ class BytecodePatchingTests extends FunSuite {
   }
 
   /** Writes a patched classfile to the workspace. */
-  private def writePatchedFile(className: String, bytes: Array[Byte], example: ExampleTest, version: String): Path = {
+  private def writePatchedFile(className: String, bytes: Array[Byte], example: LoadedExample, version: String): Path = {
     val relativePath = className.replace('.', '/') + ".class"
     val patchedPath = patchedWorkspace / example.name / version / os.RelPath(relativePath)
 
