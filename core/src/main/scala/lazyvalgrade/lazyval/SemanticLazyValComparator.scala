@@ -1,6 +1,6 @@
 package lazyvalgrade.lazyval
 
-import lazyvalgrade.classfile.ClassInfo
+import lazyvalgrade.classfile.{ClassInfo, MethodInfo}
 
 /** Result of semantic lazy val comparison.
   *
@@ -80,7 +80,7 @@ final class SemanticLazyValComparator:
       case _ =>
         val lazyVals1 = extractLazyVals(result1)
         val lazyVals2 = extractLazyVals(result2)
-        compareImplementations(lazyVals1, lazyVals2)
+        compareImplementations(lazyVals1, lazyVals2, class1, class2, companion1, companion2)
 
   /** Extracts lazy vals from detection result. */
   private def extractLazyVals(result: LazyValDetectionResult): Seq[LazyValInfo] =
@@ -92,7 +92,11 @@ final class SemanticLazyValComparator:
   /** Compares two sequences of lazy vals semantically. */
   private def compareImplementations(
       lazyVals1: Seq[LazyValInfo],
-      lazyVals2: Seq[LazyValInfo]
+      lazyVals2: Seq[LazyValInfo],
+      class1: ClassInfo,
+      class2: ClassInfo,
+      companion1: Option[ClassInfo],
+      companion2: Option[ClassInfo]
   ): SemanticLazyValComparisonResult =
     val reasons = scala.collection.mutable.ArrayBuffer[String]()
 
@@ -118,9 +122,24 @@ final class SemanticLazyValComparator:
       val lv1 = map1(name)
       val lv2 = map2(name)
 
+      // Determine which class contains this lazy val and where OFFSET field is
+      val containingClass1 = determineContainingClass(lv1, class1, companion1)
+      val containingClass2 = determineContainingClass(lv2, class2, companion2)
+
+      // For OFFSET initialization, check companion class if OFFSET is located there
+      val offsetClass1 = if lv1.offsetFieldLocation == OffsetFieldLocation.InCompanionClass then
+        companion1.getOrElse(containingClass1)
+      else
+        containingClass1
+
+      val offsetClass2 = if lv2.offsetFieldLocation == OffsetFieldLocation.InCompanionClass then
+        companion2.getOrElse(containingClass2)
+      else
+        containingClass2
+
       // Extract canonical pattern for each
-      val pattern1 = extractCanonicalPattern(lv1)
-      val pattern2 = extractCanonicalPattern(lv2)
+      val pattern1 = extractCanonicalPattern(lv1, containingClass1, offsetClass1)
+      val pattern2 = extractCanonicalPattern(lv2, containingClass2, offsetClass2)
 
       if pattern1 != pattern2 then
         val diff = describePatternDifference(name, pattern1, pattern2)
@@ -136,45 +155,180 @@ final class SemanticLazyValComparator:
       debug(s"Lazy val implementations differ: ${reasons.size} reasons")
       SemanticLazyValComparisonResult.Different(reasons.toSeq)
 
+  /** Determines which class contains the lazy val implementation. */
+  private def determineContainingClass(
+      lv: LazyValInfo,
+      mainClass: ClassInfo,
+      companion: Option[ClassInfo]
+  ): ClassInfo =
+    // Check if accessor method is in main class or companion
+    lv.accessorMethod match
+      case Some(accessor) =>
+        if mainClass.methods.exists(_.name == accessor.name) then mainClass
+        else companion.getOrElse(mainClass)
+      case None => mainClass
+
   /** Extracts a canonical pattern signature for a lazy val.
     *
     * This captures the essential implementation characteristics
-    * for the detected version.
+    * for the detected version by extracting synchronization skeleton.
+    *
+    * @param lv The lazy val info
+    * @param containingClass The class containing the lazy val implementation
+    * @param offsetClass The class containing the OFFSET field initialization (may be companion class)
     */
-  private def extractCanonicalPattern(lv: LazyValInfo): LazyValCanonicalPattern =
+  private def extractCanonicalPattern(
+      lv: LazyValInfo,
+      containingClass: ClassInfo,
+      offsetClass: ClassInfo
+  ): LazyValCanonicalPattern =
     lv.version match
       case ScalaVersion.Scala30x_31x | ScalaVersion.Scala32x =>
         // Bitmap-based inline pattern
+        val accessorSkeleton = lv.accessorMethod.map(extractSynchronizationSkeleton)
+        // Extract OFFSET initialization pattern from <clinit> of the class that has OFFSET
+        val offsetInitPattern = lv.offsetField.flatMap(_ => extractOffsetInitPattern(offsetClass))
         LazyValCanonicalPattern.BitmapBased(
           hasOffsetField = lv.offsetField.isDefined,
           hasBitmapField = lv.bitmapField.isDefined,
           storageDescriptor = lv.storageField.descriptor,
           hasInitMethod = lv.initMethod.isDefined, // Should be false
-          accessorInstructionCount = lv.accessorMethod.map(_.instructions.size)
+          accessorSkeleton = accessorSkeleton,
+          offsetInitPattern = offsetInitPattern
         )
 
       case ScalaVersion.Scala33x_37x =>
         // Object-based with Unsafe
+        val initSkeleton = lv.initMethod.map(extractSynchronizationSkeleton)
+        val accessorSkeleton = lv.accessorMethod.map(extractSynchronizationSkeleton)
         LazyValCanonicalPattern.ObjectBasedUnsafe(
           hasOffsetField = lv.offsetField.isDefined,
           storageDescriptor = lv.storageField.descriptor,
           hasInitMethod = lv.initMethod.isDefined,
-          initInstructionCount = lv.initMethod.map(_.instructions.size),
-          accessorInstructionCount = lv.accessorMethod.map(_.instructions.size)
+          initSkeleton = initSkeleton,
+          accessorSkeleton = accessorSkeleton
         )
 
       case ScalaVersion.Scala38Plus =>
         // Object-based with VarHandle
+        val initSkeleton = lv.initMethod.map(extractSynchronizationSkeleton)
+        val accessorSkeleton = lv.accessorMethod.map(extractSynchronizationSkeleton)
         LazyValCanonicalPattern.ObjectBasedVarHandle(
           hasVarHandleField = lv.varHandleField.isDefined,
           storageDescriptor = lv.storageField.descriptor,
           hasInitMethod = lv.initMethod.isDefined,
-          initInstructionCount = lv.initMethod.map(_.instructions.size),
-          accessorInstructionCount = lv.accessorMethod.map(_.instructions.size)
+          initSkeleton = initSkeleton,
+          accessorSkeleton = accessorSkeleton
         )
 
       case ScalaVersion.Unknown =>
         LazyValCanonicalPattern.Unknown
+
+  /** Extracts OFFSET field initialization pattern from <clinit> static initializer.
+    *
+    * This captures how the OFFSET field is computed, which differs between versions:
+    * - 3.0/3.1: LazyVals$.getOffset(Class, String)
+    * - 3.2: Class.getDeclaredField(String) + LazyVals$.getOffsetStatic(Field)
+    * - 3.3+: Uses OFFSET in object-based pattern differently
+    */
+  private def extractOffsetInitPattern(classInfo: ClassInfo): Option[String] =
+    // Find <clinit> method
+    val clinit = classInfo.methods.find(m => m.name == "<clinit>")
+
+    clinit.flatMap { method =>
+      val instructions = method.instructions
+
+      // Look for OFFSET initialization patterns
+      val hasGetOffset = instructions.exists(insn =>
+        insn.details.contains("LazyVals$.getOffset") || insn.details.contains("LazyVals.getOffset")
+      )
+      val hasGetDeclaredField = instructions.exists(insn =>
+        insn.details.contains("getDeclaredField")
+      )
+      val hasGetOffsetStatic = instructions.exists(insn =>
+        insn.details.contains("getOffsetStatic")
+      )
+
+      if hasGetOffset && !hasGetDeclaredField then
+        Some("LazyVals.getOffset")  // 3.0/3.1 pattern
+      else if hasGetDeclaredField && hasGetOffsetStatic then
+        Some("getDeclaredField+getOffsetStatic")  // 3.2 pattern
+      else
+        None
+    }
+
+  /** Extracts synchronization skeleton from a method.
+    *
+    * This extracts only the lazy val synchronization operations,
+    * ignoring the actual computation (body) of the lazy val.
+    *
+    * The skeleton preserves order of operations, which is critical
+    * for thread safety semantics.
+    *
+    * @param method The method to extract from (accessor or init method)
+    * @return Sequence of synchronization instruction patterns
+    */
+  private def extractSynchronizationSkeleton(method: MethodInfo): Seq[String] =
+    import lazyvalgrade.classfile.InstructionInfo
+
+    val skeleton = scala.collection.mutable.ArrayBuffer[String]()
+    var lastOpcode: Option[String] = None
+
+    for insn <- method.instructions do
+      val normalized = normalizeSyncInstruction(insn, lastOpcode)
+      normalized.foreach(skeleton += _)
+      lastOpcode = Some(insn.opcodeString)
+
+    skeleton.toSeq
+
+  /** Normalizes a bytecode instruction to synchronization pattern form.
+    *
+    * Returns Some(pattern) if this instruction is part of synchronization logic,
+    * None if it should be ignored (part of lazy val body).
+    */
+  private def normalizeSyncInstruction(
+      insn: lazyvalgrade.classfile.InstructionInfo,
+      lastOpcode: Option[String]
+  ): Option[String] =
+    val details = insn.details.trim
+    val opcode = insn.opcodeString
+
+    // Synchronization field patterns
+    if details.contains("bitmap$") then
+      Some(s"GETFIELD bitmap")
+    else if details.contains("OFFSET$") then
+      Some(s"GETFIELD OFFSET")
+    else if details.contains("$lzy") && details.contains("GETFIELD") && !details.contains("lzyHandle") then
+      Some(s"GETFIELD storage")
+    else if details.contains("$lzy") && details.contains("PUTFIELD") && !details.contains("lzyHandle") then
+      Some(s"PUTFIELD storage")
+    else if details.contains("lzyHandle") && details.contains("GETFIELD") then
+      Some(s"GETFIELD varhandle")
+    // Synchronization operations
+    else if opcode == "MONITORENTER" then
+      Some("MONITORENTER")
+    else if opcode == "MONITOREXIT" then
+      Some("MONITOREXIT")
+    // Unsafe CAS operations
+    else if details.contains("objCAS") || details.contains("compareAndSet") then
+      Some("CAS")
+    // VarHandle operations
+    else if details.contains("VarHandle") && details.contains("invoke") then
+      Some("VARHANDLE_OP")
+    // Bitwise operations on bitmaps/flags
+    else if (opcode == "IAND" || opcode == "IOR") && lastOpcode.exists(_ == "GETFIELD") then
+      Some(s"BITOP $opcode")
+    // Conditional jumps for flag checks (thread safety)
+    else if opcode.startsWith("IF") && lastOpcode.exists(op => op == "IAND" || op == "IOR") then
+      Some(s"CONDITIONAL $opcode")
+    // Stack operations immediately following sync field access (needed for CAS setup)
+    else if (opcode == "ALOAD" || opcode == "ASTORE") && lastOpcode.exists(_.contains("FIELD")) then
+      Some(s"STACK_SYNC $opcode")
+    else if opcode == "DUP" && lastOpcode.exists(_.contains("FIELD")) then
+      Some(s"STACK_SYNC DUP")
+    // Ignore everything else (lazy val body computation)
+    else
+      None
 
   /** Describes the difference between two patterns. */
   private def describePatternDifference(
@@ -183,12 +337,14 @@ final class SemanticLazyValComparator:
       p2: LazyValCanonicalPattern
   ): String =
     (p1, p2) match
-      case (LazyValCanonicalPattern.BitmapBased(_, _, desc1, _, acc1),
-            LazyValCanonicalPattern.BitmapBased(_, _, desc2, _, acc2)) =>
+      case (LazyValCanonicalPattern.BitmapBased(_, _, desc1, _, acc1, offset1),
+            LazyValCanonicalPattern.BitmapBased(_, _, desc2, _, acc2, offset2)) =>
         if desc1 != desc2 then
           s"Lazy val '$name': storage type differs ($desc1 vs $desc2)"
+        else if offset1 != offset2 then
+          s"Lazy val '$name': OFFSET initialization differs ($offset1 vs $offset2)"
         else if acc1 != acc2 then
-          s"Lazy val '$name': accessor differs ($acc1 vs $acc2 instructions)"
+          s"Lazy val '$name': accessor synchronization skeleton differs"
         else
           s"Lazy val '$name': bitmap-based patterns differ in structure"
 
@@ -197,9 +353,9 @@ final class SemanticLazyValComparator:
         if desc1 != desc2 then
           s"Lazy val '$name': storage type differs ($desc1 vs $desc2)"
         else if init1 != init2 then
-          s"Lazy val '$name': init method differs ($init1 vs $init2 instructions)"
+          s"Lazy val '$name': init method synchronization skeleton differs"
         else if acc1 != acc2 then
-          s"Lazy val '$name': accessor differs ($acc1 vs $acc2 instructions)"
+          s"Lazy val '$name': accessor synchronization skeleton differs"
         else
           s"Lazy val '$name': Unsafe-based patterns differ in structure"
 
@@ -208,9 +364,9 @@ final class SemanticLazyValComparator:
         if desc1 != desc2 then
           s"Lazy val '$name': storage type differs ($desc1 vs $desc2)"
         else if init1 != init2 then
-          s"Lazy val '$name': init method differs ($init1 vs $init2 instructions)"
+          s"Lazy val '$name': init method synchronization skeleton differs"
         else if acc1 != acc2 then
-          s"Lazy val '$name': accessor differs ($acc1 vs $acc2 instructions)"
+          s"Lazy val '$name': accessor synchronization skeleton differs"
         else
           s"Lazy val '$name': VarHandle-based patterns differ in structure"
 
@@ -227,7 +383,8 @@ private object LazyValCanonicalPattern:
       hasBitmapField: Boolean,
       storageDescriptor: String,
       hasInitMethod: Boolean,
-      accessorInstructionCount: Option[Int]
+      accessorSkeleton: Option[Seq[String]],
+      offsetInitPattern: Option[String]
   ) extends LazyValCanonicalPattern
 
   /** Object-based with Unsafe (3.3-3.7) */
@@ -235,8 +392,8 @@ private object LazyValCanonicalPattern:
       hasOffsetField: Boolean,
       storageDescriptor: String,
       hasInitMethod: Boolean,
-      initInstructionCount: Option[Int],
-      accessorInstructionCount: Option[Int]
+      initSkeleton: Option[Seq[String]],
+      accessorSkeleton: Option[Seq[String]]
   ) extends LazyValCanonicalPattern
 
   /** Object-based with VarHandle (3.8+) */
@@ -244,8 +401,8 @@ private object LazyValCanonicalPattern:
       hasVarHandleField: Boolean,
       storageDescriptor: String,
       hasInitMethod: Boolean,
-      initInstructionCount: Option[Int],
-      accessorInstructionCount: Option[Int]
+      initSkeleton: Option[Seq[String]],
+      accessorSkeleton: Option[Seq[String]]
   ) extends LazyValCanonicalPattern
 
   /** Unknown pattern */

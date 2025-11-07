@@ -1,0 +1,16 @@
+{
+  "description": "Case class with lazy val to test common pattern",
+  "mainClassName": "main",
+  "expectedClasses": [
+    {
+      "className": "Person",
+      "lazyVals": [
+        {
+          "name": "greeting",
+          "index": 1
+        }
+      ]
+    }
+  ],
+  "expectedOutput": "Hello, Alice"
+}

@@ -1,0 +1,24 @@
+{
+  "description": "Lazy vals referencing other lazy vals to test initialization order",
+  "mainClassName": "main",
+  "expectedClasses": [
+    {
+      "className": "Chain$",
+      "lazyVals": [
+        {
+          "name": "first",
+          "index": 1
+        },
+        {
+          "name": "second",
+          "index": 1
+        },
+        {
+          "name": "third",
+          "index": 1
+        }
+      ]
+    }
+  ],
+  "expectedOutput": "30"
+}
