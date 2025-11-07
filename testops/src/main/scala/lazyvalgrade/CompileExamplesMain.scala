@@ -29,6 +29,7 @@ object CompileExamplesMain {
   def main(args: Array[String]): Unit = {
     // Parse command line arguments
     val quiet = args.contains("--quiet") || args.contains("-q")
+    val patch = args.contains("--patch") || args.contains("-p")
 
     // Set up logging
     scribe.Logger.root
@@ -40,6 +41,9 @@ object CompileExamplesMain {
     if (!quiet) {
       info("=== Experimental Examples Compiler ===")
       info(s"Scala versions: ${testVersions.mkString(", ")}")
+      if (patch) {
+        info("Patching mode: enabled (will patch 3.3-3.7 versions)")
+      }
     }
 
     // Set up paths
@@ -108,6 +112,22 @@ object CompileExamplesMain {
             scribe.error(s"Failed to compile: $err")
         }
 
+        // Patch examples if --patch flag is set
+        if (patch) {
+          if (!quiet) info("\n=== Patching classfiles ===")
+          results.foreach {
+            case Right(result) =>
+              val exampleWorkspace = outputRoot / result.exampleName
+              runner.patchExample(result.exampleName, exampleWorkspace, scalaVersions) match {
+                case Right(msg) =>
+                  if (!quiet) info(s"${result.exampleName}: $msg")
+                case Left(err) =>
+                  warn(s"${result.exampleName}: $err")
+              }
+            case Left(_) => ()
+          }
+        }
+
         // Generate javap outputs
         if (!quiet) info("\n=== Generating javap outputs ===")
         results.foreach {
@@ -143,6 +163,48 @@ object CompileExamplesMain {
           case Left(_) => ()
         }
 
+        // Generate javap outputs for patched classfiles if --patch is enabled
+        if (patch) {
+          if (!quiet) info("\n=== Generating javap outputs for patched classfiles ===")
+          results.foreach {
+            case Right(result) =>
+              // Only process patchable versions (3.3-3.7)
+              val patchableVersions = testVersions.filter { version =>
+                version.startsWith("3.3") || version.startsWith("3.4") ||
+                version.startsWith("3.5") || version.startsWith("3.6") ||
+                version.startsWith("3.7")
+              }
+
+              patchableVersions.foreach { version =>
+                val patchedDir = outputRoot / result.exampleName / "patched" / version
+
+                if (os.exists(patchedDir)) {
+                  if (!quiet) info(s"Generating javap for ${result.exampleName}/patched/$version...")
+
+                  val classFiles = os
+                    .walk(patchedDir)
+                    .filter(p => os.isFile(p) && p.last.endsWith(".class"))
+                    .toSeq
+
+                  classFiles.foreach { classFile =>
+                    val className = classFile.last.stripSuffix(".class")
+                    val javapOutput = os.proc("javap", "-v", "-p", classFile.toString)
+                      .call(cwd = patchedDir, check = false, stderr = os.Pipe, stdout = os.Pipe)
+
+                    if (javapOutput.exitCode == 0) {
+                      val outputFile = patchedDir / s"$className.javap.txt"
+                      os.write.over(outputFile, javapOutput.out.text())
+                      if (!quiet) debug(s"  Written: ${outputFile.relativeTo(outputRoot)}")
+                    } else {
+                      warn(s"  Failed to run javap on $className: ${javapOutput.err.text()}")
+                    }
+                  }
+                }
+              }
+            case Left(_) => ()
+          }
+        }
+
         // Print output directory structure
         if (!quiet) {
           info("\n=== Output Structure ===")
@@ -152,16 +214,35 @@ object CompileExamplesMain {
               info(s"\n${exampleDir.last}/")
               os.list(exampleDir).foreach { versionDir =>
                 if (os.isDir(versionDir)) {
-                  val classFiles = os
-                    .walk(versionDir)
-                    .filter(p => os.isFile(p) && p.last.endsWith(".class"))
-                    .filter(p => !p.toString.contains(".bloop"))
-                    .filter(p => !p.last.contains("$package"))
-                    .size
-                  val javapFiles = os.list(versionDir)
-                    .filter(p => os.isFile(p) && p.last.endsWith(".javap.txt"))
-                    .size
-                  info(s"  ${versionDir.last}/ ($classFiles .class files, $javapFiles .javap.txt files)")
+                  if (versionDir.last == "patched") {
+                    // Handle patched directory specially
+                    info(s"  patched/")
+                    os.list(versionDir).foreach { patchedVersionDir =>
+                      if (os.isDir(patchedVersionDir)) {
+                        val classFiles = os
+                          .walk(patchedVersionDir)
+                          .filter(p => os.isFile(p) && p.last.endsWith(".class"))
+                          .size
+                        val javapFiles = os
+                          .walk(patchedVersionDir)
+                          .filter(p => os.isFile(p) && p.last.endsWith(".javap.txt"))
+                          .size
+                        info(s"    ${patchedVersionDir.last}/ ($classFiles .class files, $javapFiles .javap.txt files)")
+                      }
+                    }
+                  } else {
+                    // Regular version directory
+                    val classFiles = os
+                      .walk(versionDir)
+                      .filter(p => os.isFile(p) && p.last.endsWith(".class"))
+                      .filter(p => !p.toString.contains(".bloop"))
+                      .filter(p => !p.last.contains("$package"))
+                      .size
+                    val javapFiles = os.list(versionDir)
+                      .filter(p => os.isFile(p) && p.last.endsWith(".javap.txt"))
+                      .size
+                    info(s"  ${versionDir.last}/ ($classFiles .class files, $javapFiles .javap.txt files)")
+                  }
                 }
               }
             }
@@ -170,6 +251,9 @@ object CompileExamplesMain {
           info("\n=== Done ===")
           info("Classfiles compiled and javap outputs generated.")
           info(s"View javap outputs: cat ${outputRoot}/<example>/<version>/*.javap.txt")
+          if (patch) {
+            info(s"View patched javap outputs: cat ${outputRoot}/<example>/patched/<version>/*.javap.txt")
+          }
         }
     }
   }

@@ -1,0 +1,25 @@
+{
+  "description": "Both companion class and object have lazy vals (complex patching scenario)",
+  "mainClassName": "main",
+  "expectedClasses": [
+    {
+      "className": "Foo",
+      "lazyVals": [
+        {
+          "name": "instanceVal",
+          "index": 1
+        }
+      ]
+    },
+    {
+      "className": "Foo$",
+      "lazyVals": [
+        {
+          "name": "objectVal",
+          "index": 1
+        }
+      ]
+    }
+  ],
+  "expectedOutput": "object, instance"
+}

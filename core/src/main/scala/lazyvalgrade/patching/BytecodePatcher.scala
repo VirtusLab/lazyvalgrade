@@ -79,36 +79,70 @@ object BytecodePatcher {
           companionObjectBytes,
           classBytes
         ) =>
-      // Detect lazy vals with companion class context
-      val detectionResult = LazyValDetector.detect(companionObjectInfo, Some(classInfo))
+      // Detect lazy vals in companion object with companion class context
+      val objectDetectionResult = LazyValDetector.detect(companionObjectInfo, Some(classInfo))
 
-      val (lazyVals, version) = detectionResult match {
-        case LazyValDetectionResult.NoLazyVals => return PatchResult.NotApplicable
-        case LazyValDetectionResult.LazyValsFound(lvs, ver) => (lvs, ver)
-        case LazyValDetectionResult.MixedVersions(_) => return PatchResult.Failed("Mixed Scala versions detected")
+      // Also detect lazy vals in companion class (standalone detection)
+      val classDetectionResult = LazyValDetector.detect(classInfo, None)
+
+      // Determine if we need to patch
+      val (objectLazyVals, classLazyVals, version) = (objectDetectionResult, classDetectionResult) match {
+        case (LazyValDetectionResult.NoLazyVals, LazyValDetectionResult.NoLazyVals) =>
+          return PatchResult.NotApplicable
+        case (LazyValDetectionResult.LazyValsFound(objLvs, objVer), LazyValDetectionResult.NoLazyVals) =>
+          (objLvs, Seq.empty, objVer)
+        case (LazyValDetectionResult.NoLazyVals, LazyValDetectionResult.LazyValsFound(clsLvs, clsVer)) =>
+          (Seq.empty, clsLvs, clsVer)
+        case (LazyValDetectionResult.LazyValsFound(objLvs, objVer), LazyValDetectionResult.LazyValsFound(clsLvs, clsVer)) =>
+          // Both have lazy vals - versions must match
+          if (objVer != clsVer) {
+            return PatchResult.Failed(s"Companion class and object have different Scala versions: $clsVer vs $objVer")
+          }
+          (objLvs, clsLvs, objVer)
+        case (LazyValDetectionResult.MixedVersions(_), _) | (_, LazyValDetectionResult.MixedVersions(_)) =>
+          return PatchResult.Failed("Mixed Scala versions detected")
       }
 
-      // Check if any lazy val has OFFSET in companion class
-      val hasCompanionOffset = lazyVals.exists(_.offsetFieldLocation == OffsetFieldLocation.InCompanionClass)
-
-      // Dispatch to version-specific patching
+      // Dispatch to version-specific patching based on what we found
       version match {
-        case ScalaVersion.Scala30x_31x =>
-          patchScala30x_31x(companionObjectBytes, companionObjectInfo, lazyVals, companionObjectName)
-        case ScalaVersion.Scala32x =>
-          patchScala32x(companionObjectBytes, companionObjectInfo, lazyVals, companionObjectName)
-        case ScalaVersion.Scala33x_37x if hasCompanionOffset =>
-          // Need to patch both files
-          patchScala33x_37x(
-            companionObjectBytes,
-            companionObjectInfo,
-            lazyVals,
-            companionObjectName,
-            Some((className, classInfo, classBytes))
-          )
+        case ScalaVersion.Scala30x_31x | ScalaVersion.Scala32x =>
+          // Not implemented yet for these versions
+          if (objectLazyVals.nonEmpty) patchScala30x_31x(companionObjectBytes, companionObjectInfo, objectLazyVals, companionObjectName)
+          else if (classLazyVals.nonEmpty) patchScala30x_31x(classBytes, classInfo, classLazyVals, className)
+          else PatchResult.NotApplicable
+
         case ScalaVersion.Scala33x_37x =>
-          // Only patch companion object
-          patchScala33x_37x(companionObjectBytes, companionObjectInfo, lazyVals, companionObjectName, None, None)
+          // Handle different companion pair scenarios
+          (objectLazyVals.nonEmpty, classLazyVals.nonEmpty) match {
+            case (true, false) =>
+              // Only object has lazy vals
+              val hasCompanionOffset = objectLazyVals.exists(_.offsetFieldLocation == OffsetFieldLocation.InCompanionClass)
+              if (hasCompanionOffset) {
+                patchScala33x_37x(
+                  companionObjectBytes,
+                  companionObjectInfo,
+                  objectLazyVals,
+                  companionObjectName,
+                  Some((className, classInfo, classBytes))
+                )
+              } else {
+                patchScala33x_37x(companionObjectBytes, companionObjectInfo, objectLazyVals, companionObjectName, None, None)
+              }
+            case (false, true) =>
+              // Only class has lazy vals - patch as standalone
+              patchScala33x_37x(classBytes, classInfo, classLazyVals, className, None, None)
+            case (true, true) =>
+              // BOTH have lazy vals - need to patch both independently
+              patchCompanionPairBothHaveLazyVals33x_37x(
+                companionObjectName, className,
+                companionObjectInfo, classInfo,
+                companionObjectBytes, classBytes,
+                objectLazyVals, classLazyVals
+              )
+            case (false, false) =>
+              PatchResult.NotApplicable
+          }
+
         case ScalaVersion.Scala38Plus => PatchResult.NotApplicable
         case ScalaVersion.Unknown => PatchResult.Failed("Unknown Scala version detected")
       }
@@ -155,6 +189,89 @@ object BytecodePatcher {
   // ============================================================================
   // Scala 3.3-3.7 Patching Strategy (Unsafe → VarHandle transformation)
   // ============================================================================
+
+  /** Patches companion pair where BOTH class and object have lazy vals.
+    *
+    * This is the complex case where we need to patch both files independently.
+    */
+  private def patchCompanionPairBothHaveLazyVals33x_37x(
+      companionObjectName: String,
+      className: String,
+      companionObjectInfo: lazyvalgrade.classfile.ClassInfo,
+      classInfo: lazyvalgrade.classfile.ClassInfo,
+      companionObjectBytes: Array[Byte],
+      classBytes: Array[Byte],
+      objectLazyVals: Seq[LazyValInfo],
+      classLazyVals: Seq[LazyValInfo]
+  ): PatchResult = {
+    try {
+      // Check if object lazy vals have OFFSET in companion class
+      val objectHasCompanionOffset = objectLazyVals.exists(_.offsetFieldLocation == OffsetFieldLocation.InCompanionClass)
+
+      if (objectHasCompanionOffset) {
+        // Complex case: object has OFFSET in companion class, AND class has its own lazy vals
+        // Step 1: Patch object (which also patches class to remove OFFSET fields)
+        val objectPatchResult = patchScala33x_37x(
+          companionObjectBytes,
+          companionObjectInfo,
+          objectLazyVals,
+          companionObjectName,
+          Some((className, classInfo, classBytes))
+        )
+
+        objectPatchResult match {
+          case PatchResult.PatchedPair(_, _, patchedObjectBytes, intermediatePatchedClassBytes) =>
+            // Step 2: Parse the intermediate patched class bytes and patch again for class's own lazy vals
+            val intermediateClassInfo = ClassfileParser.parse(intermediatePatchedClassBytes).toOption.get
+            val reader = new ClassReader(intermediatePatchedClassBytes)
+            val classNode = new ClassNode(ASM9)
+            reader.accept(classNode, ClassReader.EXPAND_FRAMES)
+
+            // Patch the class node for its own lazy vals
+            patchClassNode33x_37x(classNode, className, classLazyVals)
+
+            // Write back to bytes
+            val writer = new ClassWriter(ClassWriter.COMPUTE_FRAMES)
+            classNode.accept(writer)
+            val finalPatchedClassBytes = writer.toByteArray
+
+            PatchResult.PatchedPair(companionObjectName, className, patchedObjectBytes, finalPatchedClassBytes)
+
+          case PatchResult.Failed(err) =>
+            PatchResult.Failed(s"Failed to patch companion object: $err")
+          case _ =>
+            PatchResult.Failed("Unexpected result when patching companion object")
+        }
+      } else {
+        // Simpler case: object has OFFSET in itself, class has its own lazy vals
+        // Patch both independently
+        val objectPatchResult = patchScala33x_37x(
+          companionObjectBytes,
+          companionObjectInfo,
+          objectLazyVals,
+          companionObjectName,
+          None,
+          None
+        )
+        val classPatchResult = patchScala33x_37x(classBytes, classInfo, classLazyVals, className, None, None)
+
+        (objectPatchResult, classPatchResult) match {
+          case (PatchResult.PatchedSingle(_, objBytes), PatchResult.PatchedSingle(_, clsBytes)) =>
+            PatchResult.PatchedPair(companionObjectName, className, objBytes, clsBytes)
+          case (PatchResult.Failed(err), _) =>
+            PatchResult.Failed(s"Failed to patch companion object: $err")
+          case (_, PatchResult.Failed(err)) =>
+            PatchResult.Failed(s"Failed to patch companion class: $err")
+          case _ =>
+            PatchResult.Failed("Unexpected patching result for companion pair")
+        }
+      }
+    } catch {
+      case e: Exception =>
+        e.printStackTrace()
+        PatchResult.Failed(s"Patching failed for companion pair: ${e.getMessage}")
+    }
+  }
 
   /** Patches Scala 3.3-3.7 lazy vals to 3.8+ format.
     *
@@ -267,25 +384,64 @@ object BytecodePatcher {
     }
   }
 
-  /** Patches companion class to remove OFFSET fields and related initialization. */
+  /** Patches companion class to remove OFFSET fields belonging to the companion object.
+    *
+    * IMPORTANT: Only removes OFFSET$_m_N fields (companion object's lazy vals).
+    * Preserves OFFSET$N fields (class's own lazy vals) for subsequent patching.
+    * Does NOT remove <clinit> since it may contain initialization for the class's own OFFSET fields.
+    */
   private def patchCompanionClass33x_37x(classNode: ClassNode, lazyVals: Seq[LazyValInfo]): Unit = {
-    // Remove all OFFSET fields (both OFFSET$_m_N and OFFSET$N patterns)
+    // Only remove OFFSET$_m_N fields (companion object's lazy vals)
+    // Preserve OFFSET$N fields (class's own lazy vals)
     val fieldsToRemove = scala.collection.mutable.Set[FieldNode]()
     classNode.fields.asScala.foreach { field =>
-      if (field.desc == "J" && (field.name.matches("OFFSET\\$_m_\\d+") || field.name.matches("OFFSET\\$\\d+"))) {
+      if (field.desc == "J" && field.name.matches("OFFSET\\$_m_\\d+")) {
         fieldsToRemove.add(field)
       }
     }
     fieldsToRemove.foreach(classNode.fields.remove)
 
-    // Remove <clinit> method (it only initializes OFFSET fields)
-    val methodsToRemove = scala.collection.mutable.Set[MethodNode]()
-    classNode.methods.asScala.foreach { method =>
-      if (method.name == "<clinit>") {
-        methodsToRemove.add(method)
+    // Remove initialization of OFFSET$_m_N fields from <clinit>
+    // Keep the rest of <clinit> intact for class's own OFFSET fields
+    classNode.methods.asScala.find(_.name == "<clinit>").foreach { clinit =>
+      val instructions = clinit.instructions
+      val toRemove = scala.collection.mutable.ListBuffer[AbstractInsnNode]()
+
+      var current = instructions.getFirst
+      while (current != null) {
+        current match {
+          case fieldInsn: FieldInsnNode
+            if fieldInsn.getOpcode == PUTSTATIC &&
+               fieldInsn.desc == "J" &&
+               fieldInsn.name.matches("OFFSET\\$_m_\\d+") =>
+            // Found PUTSTATIC for OFFSET$_m_N field
+            // Remove the entire initialization sequence: ALOAD/LDC -> INVOKEVIRTUAL -> PUTSTATIC
+            var prev = current.getPrevious
+            var removeCount = 0
+            // Work backwards to find the start of this field initialization
+            while (prev != null && removeCount < 10) { // Safety limit
+              prev match {
+                case _: FieldInsnNode if prev.getOpcode == GETSTATIC =>
+                  // Found start of initialization sequence
+                  var temp = prev
+                  while (temp != null && temp != current.getNext) {
+                    toRemove += temp
+                    temp = temp.getNext
+                  }
+                  removeCount = 999 // Break outer loop
+                  prev = null
+                case _ =>
+                  removeCount += 1
+                  prev = prev.getPrevious
+              }
+            }
+          case _ =>
+        }
+        current = current.getNext
       }
+
+      toRemove.foreach(instructions.remove)
     }
-    methodsToRemove.foreach(classNode.methods.remove)
   }
 
   /** Core patching logic for Scala 3.3-3.7 lazy vals. */
@@ -330,7 +486,20 @@ object BytecodePatcher {
     fieldsToRemove.foreach(classNode.fields.remove)
 
     // Step 2: Add VarHandle fields
-    offsetToVarHandle.values.toSet.foreach { varHandleName =>
+    // IMPORTANT: Even if no OFFSET fields were found (e.g., they were already removed by companion patching),
+    // we still need to add VarHandle fields for all lazy vals in the lazyVals list
+    val varHandlesToAdd = lazyVals.map { lv =>
+      s"${lv.name}$$lzy${lv.index}$$lzyHandle"
+    }.toSet
+
+    // Check which VarHandle fields already exist
+    val existingVarHandles = classNode.fields.asScala
+      .filter(f => f.desc == "Ljava/lang/invoke/VarHandle;")
+      .map(_.name)
+      .toSet
+
+    // Only add VarHandles that don't already exist
+    (varHandlesToAdd -- existingVarHandles).foreach { varHandleName =>
       val fieldNode = new FieldNode(
         ASM9,
         ACC_PRIVATE | ACC_STATIC | ACC_FINAL,
@@ -343,8 +512,83 @@ object BytecodePatcher {
     }
 
     // Step 3: Patch <clinit> method
-    classNode.methods.asScala.find(_.name == "<clinit>").foreach { clinit =>
-      patchClinitMethod33x_37x(clinit, className, offsetToVarHandle.toMap)
+    // Build complete mapping: for VarHandles without OFFSET fields, we need to add initialization
+    val allVarHandles = lazyVals.map { lv =>
+      val varHandleName = s"${lv.name}$$lzy${lv.index}$$lzyHandle"
+      val storageFieldName = s"${lv.name}$$lzy${lv.index}"
+      (varHandleName, storageFieldName)
+    }.toMap
+
+    // Step 3b: Patch or create <clinit> if needed
+    val clinitOpt = classNode.methods.asScala.find(_.name == "<clinit>")
+    clinitOpt match {
+      case Some(clinit) =>
+        // Patch existing <clinit>
+        patchClinitMethod33x_37x(clinit, className, offsetToVarHandle.toMap, allVarHandles)
+
+      case None if allVarHandles.nonEmpty =>
+        // Create new <clinit> to initialize VarHandle fields
+        val clinit = new MethodNode(
+          ASM9,
+          ACC_STATIC,
+          "<clinit>",
+          "()V",
+          null,
+          null
+        )
+
+        // Add VarHandle initialization for each lazy val
+        allVarHandles.foreach { case (varHandleName, storageFieldName) =>
+          // MethodHandles.lookup()
+          clinit.instructions.add(
+            new MethodInsnNode(
+              INVOKESTATIC,
+              "java/lang/invoke/MethodHandles",
+              "lookup",
+              "()Ljava/lang/invoke/MethodHandles$Lookup;",
+              false
+            )
+          )
+
+          // LDC <Class>
+          clinit.instructions.add(new LdcInsnNode(org.objectweb.asm.Type.getObjectType(className.replace('.', '/'))))
+
+          // LDC <FieldName>
+          clinit.instructions.add(new LdcInsnNode(storageFieldName))
+
+          // LDC Object.class
+          clinit.instructions.add(new LdcInsnNode(org.objectweb.asm.Type.getType("Ljava/lang/Object;")))
+
+          // INVOKEVIRTUAL Lookup.findVarHandle
+          clinit.instructions.add(
+            new MethodInsnNode(
+              INVOKEVIRTUAL,
+              "java/lang/invoke/MethodHandles$Lookup",
+              "findVarHandle",
+              "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/VarHandle;",
+              false
+            )
+          )
+
+          // PUTSTATIC <Class>.<varHandleName>
+          clinit.instructions.add(
+            new FieldInsnNode(
+              PUTSTATIC,
+              className.replace('.', '/'),
+              varHandleName,
+              "Ljava/lang/invoke/VarHandle;"
+            )
+          )
+        }
+
+        // RETURN
+        clinit.instructions.add(new InsnNode(RETURN))
+
+        // Add method to class
+        classNode.methods.add(clinit)
+
+      case None =>
+        // No clinit and no VarHandles to initialize, do nothing
     }
 
     // Step 4: Patch lzyINIT methods
@@ -372,7 +616,8 @@ object BytecodePatcher {
   private def patchClinitMethod33x_37x(
       method: MethodNode,
       className: String,
-      offsetToVarHandle: Map[String, String]
+      offsetToVarHandle: Map[String, String],
+      allVarHandles: Map[String, String] // varHandleName -> storageFieldName
   ): Unit = {
     val instructions = method.instructions
     val toRemove = scala.collection.mutable.ArrayBuffer[AbstractInsnNode]()
@@ -488,6 +733,71 @@ object BytecodePatcher {
       newInsns.asScala.foreach(instructions.insertBefore(anchor, _))
     }
     toRemove.foreach(instructions.remove)
+
+    // Add initialization for VarHandles that don't have OFFSET fields (e.g., after companion patching)
+    val initializedVarHandles = offsetToVarHandle.values.toSet
+    val uninitializedVarHandles = allVarHandles.filterKeys(!initializedVarHandles.contains(_))
+
+    if (uninitializedVarHandles.nonEmpty) {
+      // Find a good insertion point (before RETURN)
+      var returnInsn: AbstractInsnNode = null
+      var current = instructions.getLast
+      while (current != null && returnInsn == null) {
+        if (current.getOpcode == RETURN) {
+          returnInsn = current
+        }
+        current = current.getPrevious
+      }
+
+      if (returnInsn != null) {
+        uninitializedVarHandles.foreach { case (varHandleName, storageFieldName) =>
+          val newInsns = new java.util.ArrayList[AbstractInsnNode]()
+
+          // INVOKESTATIC MethodHandles.lookup
+          newInsns.add(
+            new MethodInsnNode(
+              INVOKESTATIC,
+              "java/lang/invoke/MethodHandles",
+              "lookup",
+              "()Ljava/lang/invoke/MethodHandles$Lookup;",
+              false
+            )
+          )
+
+          // LDC <Class>
+          newInsns.add(new LdcInsnNode(org.objectweb.asm.Type.getObjectType(className.replace('.', '/'))))
+
+          // LDC <FieldName>
+          newInsns.add(new LdcInsnNode(storageFieldName))
+
+          // LDC Object.class
+          newInsns.add(new LdcInsnNode(org.objectweb.asm.Type.getType("Ljava/lang/Object;")))
+
+          // INVOKEVIRTUAL Lookup.findVarHandle
+          newInsns.add(
+            new MethodInsnNode(
+              INVOKEVIRTUAL,
+              "java/lang/invoke/MethodHandles$Lookup",
+              "findVarHandle",
+              "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/VarHandle;",
+              false
+            )
+          )
+
+          // PUTSTATIC <Class>.<varHandleName>
+          newInsns.add(
+            new FieldInsnNode(
+              PUTSTATIC,
+              className.replace('.', '/'),
+              varHandleName,
+              "Ljava/lang/invoke/VarHandle;"
+            )
+          )
+
+          newInsns.asScala.foreach(instructions.insertBefore(returnInsn, _))
+        }
+      }
+    }
   }
 
   /** Patches lzyINIT for 3.3-3.7: objCAS → VarHandle.compareAndSet */
@@ -674,11 +984,18 @@ object BytecodePatcher {
     }
 
     // Step 3: Patch or create <clinit> method
+    // Build complete mapping for all VarHandles
+    val allVarHandles = lazyVals.map { lv =>
+      val varHandleName = s"${lv.name}$$lzy${lv.index}$$lzyHandle"
+      val storageFieldName = s"${lv.name}$$lzy${lv.index}"
+      (varHandleName, storageFieldName)
+    }.toMap
+
     val clinitOpt = companionClassNode.methods.asScala.find(_.name == "<clinit>")
     clinitOpt match {
       case Some(clinit) =>
         // Patch existing <clinit>: replace OFFSET initialization with VarHandle initialization
-        patchClinitMethod33x_37x(clinit, companionClassName, offsetToVarHandle)
+        patchClinitMethod33x_37x(clinit, companionClassName, offsetToVarHandle, allVarHandles)
       case None =>
         // Create new <clinit> to initialize VarHandle fields
         val clinit = new MethodNode(

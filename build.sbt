@@ -76,6 +76,7 @@ lazy val root = project
   .in(file("."))
   .settings(
     name := "lazyvalgrade",
-    addCommandAlias("compileExamples", "testops/runMain lazyvalgrade.CompileExamplesMain")
+    addCommandAlias("compileExamples", "testops/runMain lazyvalgrade.CompileExamplesMain"),
+    addCommandAlias("compileExamplesWithPatching", "testops/runMain lazyvalgrade.CompileExamplesMain --patch")
   )
   .aggregate(core, testops, tests, cli)

@@ -5,6 +5,9 @@ import scala.util.{Try, Success, Failure}
 import scala.concurrent.{Future, ExecutionContext, blocking, Await, duration}
 import ExecutionContext.Implicits.global
 import duration._
+import lazyvalgrade.analysis.{LazyValAnalyzer, ClassfileGroup}
+import lazyvalgrade.lazyval.{LazyValDetector, LazyValDetectionResult, ScalaVersion}
+import lazyvalgrade.patching.BytecodePatcher
 
 /** Runs Scala compilation examples across multiple versions
   *
@@ -263,6 +266,180 @@ class ExampleRunner(
       scalaVersions: Set[String]
   ): Seq[Either[String, ExampleCompilationResult]] =
     examplePaths.map(compileExample(_, scalaVersions))
+
+  /** Patches compiled classfiles for a specific version
+    *
+    * @param compiledDir
+    *   Directory containing compiled classfiles
+    * @param patchedDir
+    *   Directory to write patched classfiles
+    * @param scalaVersion
+    *   Scala version being patched
+    * @return
+    *   Either error message or map of class names to patched file paths
+    */
+  def patchCompiledVersion(
+      compiledDir: os.Path,
+      patchedDir: os.Path,
+      scalaVersion: String
+  ): Either[String, Map[String, Seq[os.Path]]] = {
+    // Collect class files
+    val classFiles = collectClassFiles(compiledDir)
+
+    if (classFiles.isEmpty) {
+      return Left(s"No class files found in $compiledDir")
+    }
+
+    // Build classfile map (className -> bytes)
+    val classfileMap = classFiles.map { cf =>
+      val bytes = os.read.bytes(cf.absolutePath)
+      val className = cf.relativePath.stripSuffix(".class").replace("/", ".")
+      (className, bytes)
+    }.toMap
+
+    // Group classfiles (detect companion pairs)
+    LazyValAnalyzer.group(classfileMap).flatMap { groups =>
+      // Validate that we can detect versions for all groups
+      groups.foreach { group =>
+        val detectionResult = group match {
+          case ClassfileGroup.Single(name, classInfo, _) =>
+            LazyValDetector.detect(classInfo, None)
+          case ClassfileGroup.CompanionPair(_, _, companionObjectInfo, classInfo, _, _) =>
+            LazyValDetector.detect(companionObjectInfo, Some(classInfo))
+        }
+
+        detectionResult match {
+          case LazyValDetectionResult.NoLazyVals => // OK
+          case LazyValDetectionResult.LazyValsFound(lazyVals, ScalaVersion.Unknown) =>
+            return Left(s"Detected Unknown version for ${group.primaryName} compiled with Scala $scalaVersion. LazyVals: ${lazyVals.map(lv => s"${lv.name} (version=${lv.version})").mkString(", ")}")
+          case LazyValDetectionResult.LazyValsFound(_, _) => // OK
+          case LazyValDetectionResult.MixedVersions(lazyVals) =>
+            val versionBreakdown = lazyVals.groupBy(_.version).map { case (v, lvs) => s"$v: ${lvs.map(_.name).mkString(", ")}" }.mkString("; ")
+            return Left(s"Detected mixed versions for ${group.primaryName} compiled with Scala $scalaVersion. Breakdown: $versionBreakdown")
+        }
+      }
+
+      // Patch each group
+      val resultMap = scala.collection.mutable.Map[String, Seq[os.Path]]()
+      var error: Option[String] = None
+
+      groups.foreach { group =>
+        if (error.isEmpty) {
+          BytecodePatcher.patch(group) match {
+            case BytecodePatcher.PatchResult.PatchedSingle(name, bytes) =>
+              // Write single patched file
+              val patchedPath = writePatchedFile(name, bytes, patchedDir)
+              resultMap(name) = Seq(patchedPath)
+
+            case BytecodePatcher.PatchResult
+                  .PatchedPair(companionObjectName, className, companionObjectBytes, classBytes) =>
+              // Write both patched files
+              val objectPath = writePatchedFile(companionObjectName, companionObjectBytes, patchedDir)
+              val classPath = writePatchedFile(className, classBytes, patchedDir)
+              resultMap(companionObjectName) = Seq(objectPath)
+              resultMap(className) = Seq(classPath)
+
+            case BytecodePatcher.PatchResult.NotApplicable =>
+              // Skip, no patching needed
+              ()
+
+            case BytecodePatcher.PatchResult.Failed(err) =>
+              error = Some(s"Patching failed for group ${group.primaryName}: $err")
+          }
+        }
+      }
+
+      error match {
+        case Some(err) => Left(err)
+        case None      => Right(resultMap.toMap)
+      }
+    }
+  }
+
+  /** Writes a patched classfile to the patched directory. */
+  private def writePatchedFile(className: String, bytes: Array[Byte], patchedDir: os.Path): os.Path = {
+    val relativePath = className.replace('.', '/') + ".class"
+    val patchedPath = patchedDir / os.RelPath(relativePath)
+
+    os.makeDir.all(patchedPath / os.up)
+    os.write.over(patchedPath, bytes)
+
+    patchedPath
+  }
+
+  /** Patches all versions for an example
+    *
+    * @param exampleName
+    *   Name of the example
+    * @param exampleWorkspace
+    *   Workspace containing compiled versions
+    * @param scalaVersions
+    *   Set of Scala versions to patch
+    * @return
+    *   Either error message or success message
+    */
+  def patchExample(
+      exampleName: String,
+      exampleWorkspace: os.Path,
+      scalaVersions: Set[String]
+  ): Either[String, String] = {
+    val patchedRoot = exampleWorkspace / "patched"
+
+    // Only patch versions 3.3-3.7 (these use OFFSET-based implementation)
+    val patchableVersions = scalaVersions.filter { version =>
+      version.startsWith("3.3") || version.startsWith("3.4") ||
+      version.startsWith("3.5") || version.startsWith("3.6") ||
+      version.startsWith("3.7")
+    }
+
+    if (patchableVersions.isEmpty) {
+      if (!quiet) {
+        info(s"No patchable versions found for $exampleName (need 3.3-3.7)")
+      }
+      return Right(s"No patchable versions for $exampleName")
+    }
+
+    var successCount = 0
+    var failCount = 0
+    val errors = scala.collection.mutable.ListBuffer[String]()
+
+    patchableVersions.foreach { version =>
+      val compiledDir = exampleWorkspace / version
+      val patchedDir = patchedRoot / version
+
+      if (!quiet) {
+        info(s"Patching $exampleName/$version...")
+      }
+
+      patchCompiledVersion(compiledDir, patchedDir, version) match {
+        case Right(patchedFiles) =>
+          successCount += 1
+          if (!quiet) {
+            info(s"  ✓ Patched successfully (${patchedFiles.size} classes)")
+          }
+        case Left(err) =>
+          if (err.contains("No class files found") || err.contains("NotApplicable")) {
+            // Expected for examples without lazy vals
+            if (!quiet) {
+              debug(s"  - Skipped: $err")
+            }
+          } else {
+            failCount += 1
+            val errorMsg = s"  ✗ Failed: $err"
+            warn(errorMsg)
+            errors += errorMsg
+          }
+      }
+    }
+
+    if (failCount > 0) {
+      Left(s"Patching completed with errors: $successCount succeeded, $failCount failed. Errors:\n${errors.mkString("\n")}")
+    } else if (successCount > 0) {
+      Right(s"Patched $successCount versions successfully")
+    } else {
+      Right(s"No versions were patched (no lazy vals or not applicable)")
+    }
+  }
 
   /** Discovers all example directories in the examples root
     *

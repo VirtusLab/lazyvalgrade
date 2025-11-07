@@ -18,12 +18,20 @@ The `compileExamples` command compiles all test fixtures across multiple Scala v
 **Usage:**
 
 ```bash
-# Run from sbt
+# Compile examples without patching
 sbt compileExamples
+
+# Compile examples and generate patched versions (3.3-3.7)
+sbt compileExamplesWithPatching
+
+# Run with example filtering
+SELECT_EXAMPLE=simple-lazy-val sbt compileExamples
+SELECT_EXAMPLE=simple-lazy-val,class-lazy-val sbt compileExamplesWithPatching
 
 # Or run the assembly directly
 sbt testops/assembly
 java -jar testops/target/scala-3.7.3/lazyvalgrade-testops.jar
+java -jar testops/target/scala-3.7.3/lazyvalgrade-testops.jar --patch
 ```
 
 **What it does:**
@@ -34,7 +42,8 @@ java -jar testops/target/scala-3.7.3/lazyvalgrade-testops.jar
    - 3.3.0, 3.3.6, 3.4.3, 3.5.2, 3.6.4, 3.7.3
    - 3.8.0-RC1-bin-20251026-5c51b7b-NIGHTLY
 3. Generates javap disassembly (`.javap.txt`) for each compiled classfile
-4. Outputs everything to `.out/` directory
+4. With `--patch` flag: Transforms Scala 3.3-3.7 classfiles to use VarHandle-based lazy vals (like 3.8+)
+5. Outputs everything to `.out/` directory
 
 **Output structure:**
 
@@ -46,6 +55,15 @@ java -jar testops/target/scala-3.7.3/lazyvalgrade-testops.jar
       *.javap.txt       # Javap disassembly
       *.scala          # Source files (copied)
       .scala-build/    # scala-cli build artifacts
+    patched/           # Only present when using --patch flag
+      3.3.0/           # Patched versions (3.3-3.7 only)
+        *.class        # Patched classfiles with VarHandle-based lazy vals
+        *.javap.txt    # Javap disassembly of patched files
+      3.3.6/
+      3.4.3/
+      3.5.2/
+      3.6.4/
+      3.7.3/
 ```
 
 **Inspecting results:**
@@ -57,8 +75,14 @@ ls .out/
 # View javap output for a specific version
 cat .out/companion-object-lazy-val/3.3.0/Foo$.javap.txt
 
+# View patched javap output
+cat .out/companion-object-lazy-val/patched/3.3.0/Foo$.javap.txt
+
 # Compare lazy val implementations across versions
-grep -h "OFFSET\|bitmap\|lzyHandle" .out/simple-lazy-val/*/Main$.javap.txt
+grep -h "OFFSET\|bitmap\|lzyHandle" .out/simple-lazy-val/*/SimpleLazyVal$.javap.txt
+
+# Compare original vs patched (OFFSET -> VarHandle)
+diff .out/simple-lazy-val/3.3.0/SimpleLazyVal$.javap.txt .out/simple-lazy-val/patched/3.3.0/SimpleLazyVal$.javap.txt
 
 # Count generated files
 find .out -name "*.javap.txt" | wc -l
@@ -70,6 +94,8 @@ find .out -name "*.javap.txt" | wc -l
 - Comparing bytecode patterns between versions
 - Verifying transformation correctness
 - Understanding lazy val implementation changes
+- Testing bytecode patching by comparing original vs patched implementations
+- Inspecting VarHandle vs Unsafe-based lazy val bytecode
 
 ## Testing
 

@@ -181,8 +181,8 @@ class BytecodePatchingTests extends FunSuite with ExampleLoader {
                 // Write both patched files
                 val objectPath = writePatchedFile(companionObjectName, companionObjectBytes, example, version)
                 val classPath = writePatchedFile(className, classBytes, example, version)
-                resultMap(companionObjectName) = Seq(objectPath, classPath)
-                resultMap(className) = Seq(objectPath, classPath)
+                resultMap(companionObjectName) = Seq(objectPath)
+                resultMap(className) = Seq(classPath)
 
               case BytecodePatcher.PatchResult.NotApplicable =>
                 // Skip, no patching needed
