@@ -29,6 +29,9 @@ class SemanticLazyValComparisonTests extends FunSuite with ExampleLoader {
   override val testWorkspace: os.Path = os.temp.dir(prefix = "lazyvalgrade-semantic-tests-", deleteOnExit = false)
   override val quietCompilation: Boolean = true
 
+  /** Helper to print only when not in quiet mode */
+  private def log(msg: => String): Unit = if !quietTests then println(msg)
+
   /** Test version pairs with expected comparison results */
   val versionPairs: Seq[(String, String, Boolean)] = Seq(
     // (version1, version2, shouldBeIdentical)
@@ -67,7 +70,7 @@ class SemanticLazyValComparisonTests extends FunSuite with ExampleLoader {
 
   /** All loaded examples with their test data (respects SELECT_EXAMPLE filter) */
   lazy val examples: Seq[LoadedExample] = {
-    println(s"Semantic comparison test workspace: $testWorkspace")
+    log(s"Semantic comparison test workspace: $testWorkspace")
     loadSelectedExamples()
   }
 
@@ -136,29 +139,31 @@ class SemanticLazyValComparisonTests extends FunSuite with ExampleLoader {
 
             // Verify expected result
             if shouldBeIdentical then
-              assert(
-                result.areIdentical,
-                s"Expected IDENTICAL but got: $result"
-              )
+              if !result.areIdentical then
+                // Inspect bytecode on failure
+                inspectOnFailure(example, version1, s"Semantic comparison failure: Expected IDENTICAL but got $result")
+                inspectOnFailure(example, version2, s"Semantic comparison failure: Expected IDENTICAL but got $result")
+                fail(s"Expected IDENTICAL but got: $result")
             else
-              assert(
-                !result.areIdentical,
-                s"Expected DIFFERENT but got IDENTICAL"
-              )
+              if result.areIdentical then
+                // Inspect bytecode on failure
+                inspectOnFailure(example, version1, s"Semantic comparison failure: Expected DIFFERENT but got IDENTICAL")
+                inspectOnFailure(example, version2, s"Semantic comparison failure: Expected DIFFERENT but got IDENTICAL")
+                fail(s"Expected DIFFERENT but got IDENTICAL")
 
             // Print detailed results for debugging
             result match {
               case SemanticLazyValComparisonResult.Identical =>
-                println(s"  ✓ Lazy vals are identical for Scala $version1 and $version2")
+                log(s"  ✓ Lazy vals are identical for Scala $version1 and $version2")
 
               case SemanticLazyValComparisonResult.Different(reasons) =>
-                println(s"  ✗ Lazy vals differ for Scala $version1 and $version2:")
+                log(s"  ✗ Lazy vals differ for Scala $version1 and $version2:")
                 reasons.foreach { reason =>
-                  println(s"    - $reason")
+                  log(s"    - $reason")
                 }
 
               case other =>
-                println(s"  Result for Scala $version1 and $version2: $other")
+                log(s"  Result for Scala $version1 and $version2: $other")
             }
           }
         }
@@ -239,8 +244,8 @@ class SemanticLazyValComparisonTests extends FunSuite with ExampleLoader {
           SemanticLazyValComparisonResult.Identical,
           s"Expected Identical result for Scala $version"
         )
-        println(s"  ✓ Scala $version: identical to itself")
-      else println(s"  ⊘ Scala $version: skipped (not compiled)")
+        log(s"  ✓ Scala $version: identical to itself")
+      else log(s"  ⊘ Scala $version: skipped (not compiled)")
     }
   }
 
@@ -283,7 +288,7 @@ class SemanticLazyValComparisonTests extends FunSuite with ExampleLoader {
       case SemanticLazyValComparisonResult.Different(reasons) =>
         // Should have at least one reason mentioning the difference
         assert(reasons.nonEmpty, "Should have reasons for the difference")
-        println(s"  Detected differences: ${reasons.mkString(", ")}")
+        log(s"  Detected differences: ${reasons.mkString(", ")}")
 
       case _ =>
         fail(s"Expected Different result, got: $result3233")

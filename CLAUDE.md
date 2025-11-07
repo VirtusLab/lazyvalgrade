@@ -110,27 +110,11 @@ sbt "tests/testOnly lazyvalgrade.LazyValDetectionTests"
 sbt "tests/testOnly lazyvalgrade.LazyValDetectionTests -- *companion-object-lazy-val*"
 ```
 
-### Filtering Examples
+### Filtering Examples and Scala Versions
 
-All test suites support filtering examples using the `SELECT_EXAMPLE` environment variable:
+All test suites support filtering using environment variables:
 
-```bash
-# Run tests for a single example
-SELECT_EXAMPLE=simple-lazy-val sbt test
-
-# Run tests for multiple examples (comma-separated)
-SELECT_EXAMPLE=simple-lazy-val,class-lazy-val sbt test
-
-# Run specific test suite with filtering
-SELECT_EXAMPLE=companion-object-lazy-val sbt "tests/testOnly lazyvalgrade.BytecodePatchingTests"
-
-# Without SELECT_EXAMPLE, all examples are tested (default behavior)
-sbt test
-```
-
-### Filtering Examples
-
-All test suites support filtering examples using the `SELECT_EXAMPLE` environment variable:
+#### SELECT_EXAMPLE - Filter by example name
 
 ```bash
 # Run tests for a single example
@@ -145,6 +129,38 @@ SELECT_EXAMPLE=companion-object-lazy-val sbt "tests/testOnly lazyvalgrade.Byteco
 # Without SELECT_EXAMPLE, all examples are tested (default behavior)
 sbt test
 ```
+
+#### ONLY_SCALA_VERSIONS - Filter by Scala version
+
+```bash
+# Test only specific Scala versions
+ONLY_SCALA_VERSIONS=3.1.3,3.3.0 sbt test
+
+# Combine with example filtering for targeted testing
+SELECT_EXAMPLE=simple-lazy-val ONLY_SCALA_VERSIONS=3.3.0,3.4.3 sbt test
+
+# Test a problematic version in isolation
+ONLY_SCALA_VERSIONS=3.3.0 sbt "tests/testOnly lazyvalgrade.LazyValDetectionTests"
+```
+
+#### INSPECT_BYTECODE - Enable bytecode inspection on test failures
+
+When enabled, this mode automatically prints `javap -v -p` output for failing test cases,
+showing the failed version plus adjacent versions for comparison.
+
+```bash
+# Enable bytecode inspection for all test failures
+INSPECT_BYTECODE=true sbt test
+
+# Combine all filters for precise debugging
+INSPECT_BYTECODE=true SELECT_EXAMPLE=multiple-lazy-vals ONLY_SCALA_VERSIONS=3.1.3,3.3.0 sbt test
+
+# Debug a specific test with full bytecode output
+INSPECT_BYTECODE=1 SELECT_EXAMPLE=simple-lazy-val ONLY_SCALA_VERSIONS=3.3.0 \
+  sbt "tests/testOnly lazyvalgrade.LazyValDetectionTests"
+```
+
+**INSPECT_BYTECODE accepts:** `true`, `1`, `yes` (case insensitive)
 
 **Available examples:**
 - `simple-lazy-val` - Basic lazy val in object
@@ -197,6 +213,15 @@ Test fixtures are located in `tests/src/test/resources/fixtures/examples/`:
 
 Each fixture includes a `metadata.json` file describing expected lazy val patterns.
 
+### Test Output Control
+
+Test suites support a `quietTests` flag to control verbosity. All test suites are **quiet by default** (minimal output).
+
+To enable verbose output for debugging, override in specific test suites:
+```scala
+override val quietTests: Boolean = false  // Enable verbose output
+```
+
 ### Known Issues
 
 - Test failures can be intermittent (see previous session notes)
@@ -205,7 +230,43 @@ Each fixture includes a `metadata.json` file describing expected lazy val patter
 
 ## Debugging Tips
 
+### Quick Debugging Workflow
+
+When a test fails, use this workflow for maximum debugging velocity:
+
+```bash
+# 1. Enable bytecode inspection and narrow down to the failing case
+INSPECT_BYTECODE=true SELECT_EXAMPLE=<failing-example> ONLY_SCALA_VERSIONS=<failing-version> sbt test
+
+# 2. The test will automatically print javap output for the failed version and adjacent versions
+
+# 3. For deeper analysis, compile the examples separately and inspect manually
+SELECT_EXAMPLE=<example> sbt compileExamples
+cat .out/<example>/<version>/<ClassName>.javap.txt
+
+# 4. Compare bytecode across versions
+diff .out/<example>/3.3.0/<Class>.javap.txt .out/<example>/3.4.3/<Class>.javap.txt
+```
+
+### General Tips
+
 1. Use `compileExamples` to generate fresh bytecode when behavior seems inconsistent
-2. Compare javap outputs across versions to understand bytecode differences
-3. Check `.out/` directory structure when tests fail to verify compilation succeeded
-4. Use `javap -v -p` manually for deeper inspection of specific classfiles
+2. Use `INSPECT_BYTECODE=true` to automatically see bytecode on test failures
+3. Use `ONLY_SCALA_VERSIONS` to test specific problematic versions in isolation
+4. Combine all three environment variables for pinpoint debugging
+5. Check `.out/` directory structure when tests fail to verify compilation succeeded
+6. Use `javap -v -p` manually for deeper inspection of specific classfiles
+
+### Example Debugging Session
+
+```bash
+# Start with a broad test to identify failures
+sbt test
+
+# Test fails on multiple-lazy-vals with Scala 3.3.0
+# Narrow down and inspect bytecode
+INSPECT_BYTECODE=true SELECT_EXAMPLE=multiple-lazy-vals ONLY_SCALA_VERSIONS=3.1.3,3.3.0 sbt test
+
+# The output will show javap for both versions, making it easy to spot differences
+# in lazy val implementation (bitmap vs OFFSET-based)
+```

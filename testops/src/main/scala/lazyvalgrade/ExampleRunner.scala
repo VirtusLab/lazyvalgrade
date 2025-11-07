@@ -1,7 +1,8 @@
 package lazyvalgrade
 
 import java.security.MessageDigest
-import scala.util.{Try, Success, Failure}
+import scala.util.{Try, Success, Failure, boundary}
+import scala.util.boundary.break
 import scala.concurrent.{Future, ExecutionContext, blocking, Await, duration}
 import ExecutionContext.Implicits.global
 import duration._
@@ -300,58 +301,60 @@ class ExampleRunner(
     // Group classfiles (detect companion pairs)
     LazyValAnalyzer.group(classfileMap).flatMap { groups =>
       // Validate that we can detect versions for all groups
-      groups.foreach { group =>
-        val detectionResult = group match {
-          case ClassfileGroup.Single(name, classInfo, _) =>
-            LazyValDetector.detect(classInfo, None)
-          case ClassfileGroup.CompanionPair(_, _, companionObjectInfo, classInfo, _, _) =>
-            LazyValDetector.detect(companionObjectInfo, Some(classInfo))
-        }
+      boundary {
+        groups.foreach { group =>
+          val detectionResult = group match {
+            case ClassfileGroup.Single(name, classInfo, _) =>
+              LazyValDetector.detect(classInfo, None)
+            case ClassfileGroup.CompanionPair(_, _, companionObjectInfo, classInfo, _, _) =>
+              LazyValDetector.detect(companionObjectInfo, Some(classInfo))
+          }
 
-        detectionResult match {
-          case LazyValDetectionResult.NoLazyVals => // OK
-          case LazyValDetectionResult.LazyValsFound(lazyVals, ScalaVersion.Unknown) =>
-            return Left(s"Detected Unknown version for ${group.primaryName} compiled with Scala $scalaVersion. LazyVals: ${lazyVals.map(lv => s"${lv.name} (version=${lv.version})").mkString(", ")}")
-          case LazyValDetectionResult.LazyValsFound(_, _) => // OK
-          case LazyValDetectionResult.MixedVersions(lazyVals) =>
-            val versionBreakdown = lazyVals.groupBy(_.version).map { case (v, lvs) => s"$v: ${lvs.map(_.name).mkString(", ")}" }.mkString("; ")
-            return Left(s"Detected mixed versions for ${group.primaryName} compiled with Scala $scalaVersion. Breakdown: $versionBreakdown")
-        }
-      }
-
-      // Patch each group
-      val resultMap = scala.collection.mutable.Map[String, Seq[os.Path]]()
-      var error: Option[String] = None
-
-      groups.foreach { group =>
-        if (error.isEmpty) {
-          BytecodePatcher.patch(group) match {
-            case BytecodePatcher.PatchResult.PatchedSingle(name, bytes) =>
-              // Write single patched file
-              val patchedPath = writePatchedFile(name, bytes, patchedDir)
-              resultMap(name) = Seq(patchedPath)
-
-            case BytecodePatcher.PatchResult
-                  .PatchedPair(companionObjectName, className, companionObjectBytes, classBytes) =>
-              // Write both patched files
-              val objectPath = writePatchedFile(companionObjectName, companionObjectBytes, patchedDir)
-              val classPath = writePatchedFile(className, classBytes, patchedDir)
-              resultMap(companionObjectName) = Seq(objectPath)
-              resultMap(className) = Seq(classPath)
-
-            case BytecodePatcher.PatchResult.NotApplicable =>
-              // Skip, no patching needed
-              ()
-
-            case BytecodePatcher.PatchResult.Failed(err) =>
-              error = Some(s"Patching failed for group ${group.primaryName}: $err")
+          detectionResult match {
+            case LazyValDetectionResult.NoLazyVals => // OK
+            case LazyValDetectionResult.LazyValsFound(lazyVals, ScalaVersion.Unknown) =>
+              break(Left(s"Detected Unknown version for ${group.primaryName} compiled with Scala $scalaVersion. LazyVals: ${lazyVals.map(lv => s"${lv.name} (version=${lv.version})").mkString(", ")}"))
+            case LazyValDetectionResult.LazyValsFound(_, _) => // OK
+            case LazyValDetectionResult.MixedVersions(lazyVals) =>
+              val versionBreakdown = lazyVals.groupBy(_.version).map { case (v, lvs) => s"$v: ${lvs.map(_.name).mkString(", ")}" }.mkString("; ")
+              break(Left(s"Detected mixed versions for ${group.primaryName} compiled with Scala $scalaVersion. Breakdown: $versionBreakdown"))
           }
         }
-      }
 
-      error match {
-        case Some(err) => Left(err)
-        case None      => Right(resultMap.toMap)
+        // Patch each group
+        val resultMap = scala.collection.mutable.Map[String, Seq[os.Path]]()
+        var error: Option[String] = None
+
+        groups.foreach { group =>
+          if (error.isEmpty) {
+            BytecodePatcher.patch(group) match {
+              case BytecodePatcher.PatchResult.PatchedSingle(name, bytes) =>
+                // Write single patched file
+                val patchedPath = writePatchedFile(name, bytes, patchedDir)
+                resultMap(name) = Seq(patchedPath)
+
+              case BytecodePatcher.PatchResult
+                    .PatchedPair(companionObjectName, className, companionObjectBytes, classBytes) =>
+                // Write both patched files
+                val objectPath = writePatchedFile(companionObjectName, companionObjectBytes, patchedDir)
+                val classPath = writePatchedFile(className, classBytes, patchedDir)
+                resultMap(companionObjectName) = Seq(objectPath)
+                resultMap(className) = Seq(classPath)
+
+              case BytecodePatcher.PatchResult.NotApplicable =>
+                // Skip, no patching needed
+                ()
+
+              case BytecodePatcher.PatchResult.Failed(err) =>
+                error = Some(s"Patching failed for group ${group.primaryName}: $err")
+            }
+          }
+        }
+
+        error match {
+          case Some(err) => Left(err)
+          case None      => Right(resultMap.toMap)
+        }
       }
     }
   }
