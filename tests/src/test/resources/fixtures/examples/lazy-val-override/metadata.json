@@ -1,0 +1,25 @@
+{
+  "description": "Lazy val override in subclass - tests inheritance complexity",
+  "mainClassName": "main",
+  "expectedClasses": [
+    {
+      "className": "Base",
+      "lazyVals": [
+        {
+          "name": "value",
+          "index": 1
+        }
+      ]
+    },
+    {
+      "className": "Derived",
+      "lazyVals": [
+        {
+          "name": "value",
+          "index": 2
+        }
+      ]
+    }
+  ],
+  "expectedOutput": "derived"
+}

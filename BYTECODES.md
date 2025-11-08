@@ -1250,21 +1250,46 @@ For classes with multiple lazy vals:
 
 **Important: Lazy Val Index Convention**
 
-All lazy vals in a single class/object share the **same index** (typically 1):
+**Rule 1: Multiple lazy vals in the same class share the same `$lzyN` index:**
+
+All lazy vals defined in a single class/object compilation unit share the **same index** (typically 1):
 ```scala
 object MultipleLazyVals:
-  lazy val first: String = "one"     // index=1
-  lazy val second: Int = 42          // index=1
-  lazy val third: Double = 3.14      // index=1
-  lazy val fourth: Boolean = true    // index=1
+  lazy val first: String = "one"     // → first$lzy1, first$lzyINIT1
+  lazy val second: Int = 42          // → second$lzy1, second$lzyINIT1
+  lazy val third: Double = 3.14      // → third$lzy1, third$lzyINIT1
+  lazy val fourth: Boolean = true    // → fourth$lzy1, fourth$lzyINIT1
 ```
 
-This means:
-- Storage fields: `first$lzy1`, `second$lzy1`, `third$lzy1`, `fourth$lzy1`
-- OFFSET fields: `OFFSET$_m_0`, `OFFSET$_m_1`, `OFFSET$_m_2`, `OFFSET$_m_3` (one per lazy val)
+This produces:
+- Storage fields: `first$lzy1`, `second$lzy1`, `third$lzy1`, `fourth$lzy1` (all index 1)
+- OFFSET fields: `OFFSET$_m_0`, `OFFSET$_m_1`, `OFFSET$_m_2`, `OFFSET$_m_3` (one per lazy val, indexed by declaration order)
 - VarHandle fields: `first$lzy1$lzyHandle`, `second$lzy1$lzyHandle`, etc.
 
-The index in the storage field name (`$lzy1`) is NOT unique per lazy val - it's constant for all lazy vals in the class. The OFFSET field index (`$_m_N`) is what distinguishes different lazy vals, where N = lazy val index - 1 (so N=0 for index=1).
+The `$lzy1` index is NOT unique per lazy val - it's constant for all lazy vals in the same class. The OFFSET field index (`$_m_N`) is what distinguishes different lazy vals, where N is the 0-based declaration order.
+
+**Rule 2: Overridden lazy vals get a new `$lzyN` index:**
+
+When a subclass overrides a lazy val from its parent, the subclass increments the index:
+```scala
+abstract class Base:
+  lazy val value: String = "base"    // → value$lzy1, value$lzyINIT1, OFFSET$0
+
+class Derived extends Base:
+  override lazy val value: String = "derived"  // → value$lzy2, value$lzyINIT2, OFFSET$0
+```
+
+This produces:
+- **Base class:** `value$lzy1`, `value$lzyINIT1()`, `OFFSET$0`
+- **Derived class:** `value$lzy2`, `value$lzyINIT2()`, `OFFSET$0`
+
+**Why the index increments on override:**
+- Each class maintains its own lazy val counter during compilation
+- `Base` compiles its `value` as its first lazy val → index 1
+- `Derived` sees the override as a new lazy val definition → index 2 (since index 1 was used by the inherited field)
+- The override creates a completely new storage field that shadows the parent's field
+
+The OFFSET index remains 0 in both classes because each class only declares one lazy val (even though Derived inherits another).
 
 ## Testing Strategy
 

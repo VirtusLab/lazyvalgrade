@@ -233,7 +233,7 @@ class BytecodePatchingTests extends FunSuite with ExampleLoader {
   def getScalaCliClasspath(targetDir: os.Path, scalaVersion: String): String = {
     val result = os
       .proc("scala-cli", "compile", "--print-classpath", "--jvm", "17", "-S", scalaVersion, targetDir.toString)
-      .call(cwd = targetDir)
+      .call(cwd = targetDir, stderr = os.Pipe, stdout = os.Pipe)
 
     result.out.text().trim
   }
