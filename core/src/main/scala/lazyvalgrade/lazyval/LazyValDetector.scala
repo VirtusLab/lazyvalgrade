@@ -244,8 +244,8 @@ final class LazyValDetector:
       // Direct mapping to storage field (3.3+ unsafe/varhandle)
       case (offsetName, mappedStorageName) if mappedStorageName == storageFieldName => offsetName
       // Mapping to bitmap field (3.0-3.2 bitmap-based)
-      // Bitmap field has same index as storage field: "a$lzy1" -> "0bitmap$1"
-      case (offsetName, mappedName) if mappedName.contains("bitmap") && lazyValIndex.exists(idx => mappedName.endsWith(s"$$${idx}")) => offsetName
+      // Bitmap field is shared by all lazy vals in the class; its index is unrelated to the storage field index
+      case (offsetName, mappedName) if mappedName.contains("bitmap") => offsetName
     }
 
     offsetFieldName match
@@ -293,7 +293,7 @@ final class LazyValDetector:
 
     // Find which OFFSET field maps to a bitmap field with the same index
     val bitmapFieldName = offsetMapping.collectFirst {
-      case (offsetName, mappedName) if mappedName.contains("bitmap") && lazyValIndex.exists(idx => mappedName.endsWith(s"$$${idx}")) => mappedName
+      case (offsetName, mappedName) if mappedName.contains("bitmap") => mappedName
     }
 
     bitmapFieldName.flatMap { bitmapName =>

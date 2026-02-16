@@ -1,0 +1,16 @@
+{
+  "description": "Mixed lazy and non-lazy vals - tests distinguishing lazy val from val and var",
+  "mainClassName": "main",
+  "expectedClasses": [
+    {
+      "className": "Mixed",
+      "lazyVals": [
+        {
+          "name": "lazyVal",
+          "index": 1
+        }
+      ]
+    }
+  ],
+  "expectedOutput": "eager, lazy, mutable"
+}

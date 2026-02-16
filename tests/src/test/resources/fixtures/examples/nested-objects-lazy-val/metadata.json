@@ -1,0 +1,25 @@
+{
+  "description": "Deeply nested objects with lazy vals - tests scope handling for nested singleton objects",
+  "mainClassName": "main",
+  "expectedClasses": [
+    {
+      "className": "Outer$",
+      "lazyVals": [
+        {
+          "name": "outerVal",
+          "index": 1
+        }
+      ]
+    },
+    {
+      "className": "Outer$Inner$",
+      "lazyVals": [
+        {
+          "name": "innerVal",
+          "index": 1
+        }
+      ]
+    }
+  ],
+  "expectedOutput": "outer, inner"
+}

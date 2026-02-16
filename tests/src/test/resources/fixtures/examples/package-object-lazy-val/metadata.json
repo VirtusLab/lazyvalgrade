@@ -1,0 +1,16 @@
+{
+  "description": "Package object with lazy val - tests detection in package$ compilation unit",
+  "mainClassName": "main",
+  "expectedClasses": [
+    {
+      "className": "foo/package$",
+      "lazyVals": [
+        {
+          "name": "packageValue",
+          "index": 1
+        }
+      ]
+    }
+  ],
+  "expectedOutput": "pkg-value"
+}

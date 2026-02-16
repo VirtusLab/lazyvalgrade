@@ -1,0 +1,16 @@
+{
+  "description": "Lazy val with generic type parameter - tests type erasure handling",
+  "mainClassName": "main",
+  "expectedClasses": [
+    {
+      "className": "Container",
+      "lazyVals": [
+        {
+          "name": "stored",
+          "index": 1
+        }
+      ]
+    }
+  ],
+  "expectedOutput": "test"
+}

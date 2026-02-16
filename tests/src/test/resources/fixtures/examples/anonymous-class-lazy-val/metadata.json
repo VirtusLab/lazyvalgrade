@@ -1,0 +1,20 @@
+{
+  "description": "Lazy val in anonymous class implementing a trait",
+  "mainClassName": "main",
+  "expectedClasses": [
+    {
+      "className": "Processor",
+      "lazyVals": []
+    },
+    {
+      "className": "App$$anon$1",
+      "lazyVals": [
+        {
+          "name": "result",
+          "index": 1
+        }
+      ]
+    }
+  ],
+  "expectedOutput": "anonymous"
+}

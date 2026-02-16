@@ -1,0 +1,29 @@
+{
+  "description": "Private and protected lazy vals - tests access modifier handling",
+  "mainClassName": "main",
+  "expectedClasses": [
+    {
+      "className": "Secret",
+      "lazyVals": [
+        {
+          "name": "secret",
+          "index": 1
+        }
+      ]
+    },
+    {
+      "className": "Base",
+      "lazyVals": [
+        {
+          "name": "protectedVal",
+          "index": 1
+        }
+      ]
+    },
+    {
+      "className": "Derived",
+      "lazyVals": []
+    }
+  ],
+  "expectedOutput": "hidden\nprotected"
+}

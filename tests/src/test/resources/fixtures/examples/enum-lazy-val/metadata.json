@@ -1,0 +1,16 @@
+{
+  "description": "Lazy val in enum - tests detection in Scala 3 enum classes",
+  "mainClassName": "main",
+  "expectedClasses": [
+    {
+      "className": "Color",
+      "lazyVals": [
+        {
+          "name": "hex",
+          "index": 1
+        }
+      ]
+    }
+  ],
+  "expectedOutput": "#FF0000"
+}

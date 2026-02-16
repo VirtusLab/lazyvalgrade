@@ -62,7 +62,7 @@ class BytecodePatchingTests extends FunSuite with ExampleLoader {
 
   val cleanupWorkspace: Boolean = false
 
-  override val quietTests: Boolean = true // BytecodePatchingTests is quiet by default
+  override val quietTests: Boolean = false // BytecodePatchingTests is quiet by default
 
   /** Helper to print only when not in quiet mode */
   private def log(msg: => String): Unit = if !quietTests then println(msg)
@@ -361,9 +361,9 @@ class BytecodePatchingTests extends FunSuite with ExampleLoader {
             case Right(patchedFilesMap) if patchedFilesMap.nonEmpty =>
               log(s"  Testing patched $version runtime")
 
-              // Get the patched output directory (parent of first patched file)
-              val firstPatchedFile = patchedFilesMap.values.head.head
-              val outputDir = os.Path(firstPatchedFile.getParent)
+              // Use the patched workspace root for this example/version (not the file's parent,
+              // which would be wrong for classes in packages like foo.package$)
+              val outputDir = patchedWorkspace / example.name / version
               val targetDir = testWorkspace / example.name / version
               val scalaLibClasspath = getScalaCliClasspath(targetDir, version)
               val (exitCode, stdout, stderr) = runWithJava(outputDir, scalaLibClasspath, mainClassName)
@@ -378,13 +378,13 @@ class BytecodePatchingTests extends FunSuite with ExampleLoader {
               // Verify NO Unsafe warning
               assert(
                 !stderr.contains("sun.misc.Unsafe"),
-                s"Patched $version should NOT have Unsafe warning in stderr, but got: $stderr"
+                s"[${example.name}] Patched $version should NOT have Unsafe warning in stderr, but got: $stderr"
               )
 
               log(s"    ✓ Correct output and NO Unsafe warning")
 
             case Left(error) =>
-              fail(s"Failed to patch for runtime testing: $error")
+              fail(s"[${example.name}/$version] Failed to patch for runtime testing: $error")
 
             case Right(_) =>
               log(s"  ⊘ No files patched for $version")

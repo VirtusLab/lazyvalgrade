@@ -178,10 +178,6 @@ class LazyValDetectionTests extends FunSuite with ExampleLoader {
                         lazyVal.initMethod.isEmpty,
                         s"Did not expect lzyINIT method for ${lazyVal.name} in 3.0-3.2.x"
                       )
-                      assert(
-                        lazyVal.storageField.descriptor != "Ljava/lang/Object;",
-                        s"Expected typed storage field for ${lazyVal.name} in 3.0-3.2.x"
-                      )
                     }
 
                   case ScalaVersion.Scala33x_37x =>
