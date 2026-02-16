@@ -40,7 +40,7 @@ java -jar testops/target/scala-3.7.3/lazyvalgrade-testops.jar --patch
 2. Compiles each example with all test Scala versions:
    - 3.0.2, 3.1.3, 3.2.2
    - 3.3.0, 3.3.6, 3.4.3, 3.5.2, 3.6.4, 3.7.3
-   - 3.8.0-RC1-bin-20251026-5c51b7b-NIGHTLY
+   - 3.8.1
 3. Generates javap disassembly (`.javap.txt`) for each compiled classfile
 4. With `--patch` flag: Transforms Scala 3.3-3.7 classfiles to use VarHandle-based lazy vals (like 3.8+)
 5. Outputs everything to `.out/` directory

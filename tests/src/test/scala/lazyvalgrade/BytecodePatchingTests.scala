@@ -39,7 +39,7 @@ class BytecodePatchingTests extends FunSuite with ExampleLoader {
     "3.5.2",
     "3.6.4",
     "3.7.3",
-    "3.8.0-RC1-bin-20251026-5c51b7b-NIGHTLY"
+    "3.8.1"
   )
 
   override def requiredScalaVersions: Seq[String] = testVersions
@@ -55,7 +55,7 @@ class BytecodePatchingTests extends FunSuite with ExampleLoader {
   )
 
   /** Target version (3.8) */
-  val targetVersion: String = "3.8.0-RC1-bin-20251026-5c51b7b-NIGHTLY"
+  val targetVersion: String = "3.8.1"
 
   /** Patched workspace for transformed classfiles */
   val patchedWorkspace: os.Path = testWorkspace / "patched"

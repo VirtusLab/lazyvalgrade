@@ -52,15 +52,15 @@ class SemanticLazyValComparisonTests extends FunSuite with ExampleLoader {
     ("3.1.3", "3.3.6", false), // Different: bitmap-based vs object-based
 
     // All pre-3.8 versions vs 3.8 (all should be different)
-    ("3.0.2", "3.8.0-RC1-bin-20251026-5c51b7b-NIGHTLY", false), // Different: bitmap vs VarHandle
-    ("3.1.3", "3.8.0-RC1-bin-20251026-5c51b7b-NIGHTLY", false), // Different: bitmap vs VarHandle
-    ("3.2.2", "3.8.0-RC1-bin-20251026-5c51b7b-NIGHTLY", false), // Different: bitmap vs VarHandle
-    ("3.3.0", "3.8.0-RC1-bin-20251026-5c51b7b-NIGHTLY", false), // Different: Unsafe vs VarHandle
-    ("3.3.6", "3.8.0-RC1-bin-20251026-5c51b7b-NIGHTLY", false), // Different: Unsafe vs VarHandle
-    ("3.4.3", "3.8.0-RC1-bin-20251026-5c51b7b-NIGHTLY", false), // Different: Unsafe vs VarHandle
-    ("3.5.2", "3.8.0-RC1-bin-20251026-5c51b7b-NIGHTLY", false), // Different: Unsafe vs VarHandle
-    ("3.6.4", "3.8.0-RC1-bin-20251026-5c51b7b-NIGHTLY", false), // Different: Unsafe vs VarHandle
-    ("3.7.3", "3.8.0-RC1-bin-20251026-5c51b7b-NIGHTLY", false) // Different: Unsafe vs VarHandle
+    ("3.0.2", "3.8.1", false), // Different: bitmap vs VarHandle
+    ("3.1.3", "3.8.1", false), // Different: bitmap vs VarHandle
+    ("3.2.2", "3.8.1", false), // Different: bitmap vs VarHandle
+    ("3.3.0", "3.8.1", false), // Different: Unsafe vs VarHandle
+    ("3.3.6", "3.8.1", false), // Different: Unsafe vs VarHandle
+    ("3.4.3", "3.8.1", false), // Different: Unsafe vs VarHandle
+    ("3.5.2", "3.8.1", false), // Different: Unsafe vs VarHandle
+    ("3.6.4", "3.8.1", false), // Different: Unsafe vs VarHandle
+    ("3.7.3", "3.8.1", false) // Different: Unsafe vs VarHandle
   )
 
   override def requiredScalaVersions: Seq[String] =

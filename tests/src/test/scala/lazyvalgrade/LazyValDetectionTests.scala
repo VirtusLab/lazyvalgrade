@@ -35,7 +35,7 @@ class LazyValDetectionTests extends FunSuite with ExampleLoader {
     ("3.5.2", ScalaVersion.Scala33x_37x),
     ("3.6.4", ScalaVersion.Scala33x_37x),
     ("3.7.3", ScalaVersion.Scala33x_37x),
-    ("3.8.0-RC1-bin-20251026-5c51b7b-NIGHTLY", ScalaVersion.Scala38Plus)
+    ("3.8.1", ScalaVersion.Scala38Plus)
   )
 
   override def requiredScalaVersions: Seq[String] = testVersions.map(_._1)

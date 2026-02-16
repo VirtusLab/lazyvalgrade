@@ -23,7 +23,7 @@ object CompileExamplesMain {
     "3.5.2",
     "3.6.4",
     "3.7.3",
-    "3.8.0-RC1-bin-20251026-5c51b7b-NIGHTLY"
+    "3.8.1"
   )
 
   def main(args: Array[String]): Unit = {
