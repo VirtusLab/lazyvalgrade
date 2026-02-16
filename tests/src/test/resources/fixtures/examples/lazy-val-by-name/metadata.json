@@ -1,0 +1,16 @@
+{
+  "description": "Lazy val capturing a by-name parameter to test closure-based initializer handling",
+  "mainClassName": "main",
+  "expectedClasses": [
+    {
+      "className": "Deferred",
+      "lazyVals": [
+        {
+          "name": "stored",
+          "index": 1
+        }
+      ]
+    }
+  ],
+  "expectedOutput": "stored = evaluated-1\nstored = evaluated-1\ncounter = 1"
+}

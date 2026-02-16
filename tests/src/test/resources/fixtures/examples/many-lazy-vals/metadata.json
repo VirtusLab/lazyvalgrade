@@ -1,0 +1,47 @@
+{
+  "description": "35 lazy vals to force second bitmap word (33+ exceeds 32 lazy vals per Long bitmap)",
+  "mainClassName": "main",
+  "expectedClasses": [
+    {
+      "className": "ManyLazy$",
+      "lazyVals": [
+        { "name": "v01", "index": 1 },
+        { "name": "v02", "index": 1 },
+        { "name": "v03", "index": 1 },
+        { "name": "v04", "index": 1 },
+        { "name": "v05", "index": 1 },
+        { "name": "v06", "index": 1 },
+        { "name": "v07", "index": 1 },
+        { "name": "v08", "index": 1 },
+        { "name": "v09", "index": 1 },
+        { "name": "v10", "index": 1 },
+        { "name": "v11", "index": 1 },
+        { "name": "v12", "index": 1 },
+        { "name": "v13", "index": 1 },
+        { "name": "v14", "index": 1 },
+        { "name": "v15", "index": 1 },
+        { "name": "v16", "index": 1 },
+        { "name": "v17", "index": 1 },
+        { "name": "v18", "index": 1 },
+        { "name": "v19", "index": 1 },
+        { "name": "v20", "index": 1 },
+        { "name": "v21", "index": 1 },
+        { "name": "v22", "index": 1 },
+        { "name": "v23", "index": 1 },
+        { "name": "v24", "index": 1 },
+        { "name": "v25", "index": 1 },
+        { "name": "v26", "index": 1 },
+        { "name": "v27", "index": 1 },
+        { "name": "v28", "index": 1 },
+        { "name": "v29", "index": 1 },
+        { "name": "v30", "index": 1 },
+        { "name": "v31", "index": 1 },
+        { "name": "v32", "index": 1 },
+        { "name": "v33", "index": 1 },
+        { "name": "v34", "index": 1 },
+        { "name": "v35", "index": 1 }
+      ]
+    }
+  ],
+  "expectedOutput": "v35 = 35"
+}

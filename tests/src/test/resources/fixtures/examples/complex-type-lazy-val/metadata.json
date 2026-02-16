@@ -1,0 +1,24 @@
+{
+  "description": "Lazy vals with complex types (Tuple, Function, nested generics) to test type erasure handling",
+  "mainClassName": "main",
+  "expectedClasses": [
+    {
+      "className": "ComplexTypes$",
+      "lazyVals": [
+        {
+          "name": "tuple",
+          "index": 1
+        },
+        {
+          "name": "func",
+          "index": 1
+        },
+        {
+          "name": "nested",
+          "index": 1
+        }
+      ]
+    }
+  ],
+  "expectedOutput": "tuple = (42,test,3.14)\nfunc(5) = number: 5\nnested = List(Map(a -> 1), Map(b -> 2))"
+}

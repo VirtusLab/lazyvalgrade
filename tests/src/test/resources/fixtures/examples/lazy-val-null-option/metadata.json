@@ -1,0 +1,24 @@
+{
+  "description": "Lazy val storing null and Option values to test sentinel value handling",
+  "mainClassName": "main",
+  "expectedClasses": [
+    {
+      "className": "LazyValNullOption$",
+      "lazyVals": [
+        {
+          "name": "nullValue",
+          "index": 1
+        },
+        {
+          "name": "noneValue",
+          "index": 1
+        },
+        {
+          "name": "someValue",
+          "index": 1
+        }
+      ]
+    }
+  ],
+  "expectedOutput": "nullValue = null\nnullValue = null\nevalCount = 1\nnoneValue = None\nsomeValue = Some(hello)"
+}

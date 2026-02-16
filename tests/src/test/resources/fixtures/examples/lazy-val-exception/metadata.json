@@ -1,0 +1,20 @@
+{
+  "description": "Lazy val with exception in initializer to verify correct retry semantics after patching",
+  "mainClassName": "main",
+  "expectedClasses": [
+    {
+      "className": "LazyValException$",
+      "lazyVals": [
+        {
+          "name": "failing",
+          "index": 1
+        },
+        {
+          "name": "safe",
+          "index": 1
+        }
+      ]
+    }
+  ],
+  "expectedOutput": "safe = safe\ncaught: oops\ncaught again: oops\nattempts = 2"
+}

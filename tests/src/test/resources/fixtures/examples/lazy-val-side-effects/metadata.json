@@ -1,0 +1,16 @@
+{
+  "description": "Lazy val with side effects to verify single initialization after patching",
+  "mainClassName": "main",
+  "expectedClasses": [
+    {
+      "className": "SideEffect$",
+      "lazyVals": [
+        {
+          "name": "value",
+          "index": 1
+        }
+      ]
+    }
+  ],
+  "expectedOutput": "value = 42\nvalue = 42\ncounter = 1"
+}

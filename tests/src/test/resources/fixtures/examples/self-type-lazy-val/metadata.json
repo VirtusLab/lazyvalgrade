@@ -1,0 +1,16 @@
+{
+  "description": "Self-type annotation with lazy val to verify trait self-type scope handling",
+  "mainClassName": "main",
+  "expectedClasses": [
+    {
+      "className": "MyComponent",
+      "lazyVals": [
+        {
+          "name": "name",
+          "index": 1
+        }
+      ]
+    }
+  ],
+  "expectedOutput": "name = component\ncomponent logging via [LOG] hello"
+}

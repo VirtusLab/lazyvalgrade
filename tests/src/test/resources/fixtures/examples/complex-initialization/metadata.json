@@ -1,0 +1,24 @@
+{
+  "description": "Lazy vals with complex block-body initializers including loops, pattern matching, and collections",
+  "mainClassName": "main",
+  "expectedClasses": [
+    {
+      "className": "ComplexInit$",
+      "lazyVals": [
+        {
+          "name": "computed",
+          "index": 1
+        },
+        {
+          "name": "multiStep",
+          "index": 1
+        },
+        {
+          "name": "withPatternMatch",
+          "index": 1
+        }
+      ]
+    }
+  ],
+  "expectedOutput": "computed = 80\nmultiStep = step1 step2 step3\nwithPatternMatch = positive-42"
+}
