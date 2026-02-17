@@ -23,7 +23,7 @@ import scala.collection.immutable.TreeSet
 class BytecodePatchingTests extends FunSuite with ExampleLoader {
 
   // Increase timeout for tests that compile multiple Scala versions
-  override val munitTimeout = scala.concurrent.duration.Duration(180, "s")
+  override val munitTimeout = scala.concurrent.duration.Duration(600, "s")
 
   // ===== ExampleLoader implementation =====
 
@@ -33,6 +33,8 @@ class BytecodePatchingTests extends FunSuite with ExampleLoader {
 
   /** Scala versions for testing */
   val testVersions: Seq[String] = Seq(
+    "3.0.2",
+    "3.1.3",
     "3.3.0",
     "3.3.6",
     "3.4.3",
@@ -44,8 +46,10 @@ class BytecodePatchingTests extends FunSuite with ExampleLoader {
 
   override def requiredScalaVersions: Seq[String] = testVersions
 
-  /** Versions that need patching (3.3-3.7) */
+  /** Versions that need patching (3.0-3.1, 3.3-3.7) */
   val patchableVersions: Set[String] = Set(
+    "3.0.2",
+    "3.1.3",
     "3.3.0",
     "3.3.6",
     "3.4.3",
@@ -53,6 +57,9 @@ class BytecodePatchingTests extends FunSuite with ExampleLoader {
     "3.6.4",
     "3.7.3"
   )
+
+  /** Versions that generate full 3.8+ code and need 3.8+ runtime classes (NullValue$, Evaluating$, etc.) */
+  val needsTargetRuntime: Set[String] = Set("3.0.2", "3.1.3")
 
   /** Target version (3.8) */
   val targetVersion: String = "3.8.1"
@@ -260,12 +267,16 @@ class BytecodePatchingTests extends FunSuite with ExampleLoader {
     (result.exitCode, result.out.text().trim, result.err.text().trim)
   }
 
-  /** Test: Patch all 3.3-3.7 classfiles and verify semantic equivalence with 3.8 */
-  test("Patch 3.3-3.7 bytecode and verify semantic equivalence with 3.8") {
+  /** Test: Patch patchable bytecode and verify semantic equivalence with 3.8 */
+  test("Patch patchable bytecode and verify semantic equivalence with 3.8") {
     examples.foreach { example =>
       // Skip examples without lazy vals
       if (example.metadata.expectedClasses.exists(_.lazyVals.nonEmpty)) {
         log(s"\n[${example.name}] Testing bytecode patching")
+
+        // Only test patchable versions that were actually compiled
+        val compiledPatchableVersions = patchableVersions.filter(v =>
+          example.compilationResult.results.get(v).exists(_.success))
 
         example.metadata.expectedClasses.filter(_.lazyVals.nonEmpty).foreach { expectedClass =>
           val className = expectedClass.className
@@ -277,7 +288,7 @@ class BytecodePatchingTests extends FunSuite with ExampleLoader {
           val ref38Bytes = Files.readAllBytes(ref38File.get)
           val ref38ClassInfo = ClassfileParser.parse(ref38Bytes).toOption.get
 
-          patchableVersions.foreach { version =>
+          compiledPatchableVersions.foreach { version =>
             // Patch all classfiles for this version (handles companion pairs)
             patchAllClassFilesForVersion(example, version) match {
               case Right(patchedFilesMap) =>
@@ -325,8 +336,12 @@ class BytecodePatchingTests extends FunSuite with ExampleLoader {
         val expectedOutput = example.metadata.expectedOutput.get
         val mainClassName = example.metadata.mainClassName
 
-        // Test pre-patched versions (3.3-3.7) - should have Unsafe warning
-        patchableVersions.foreach { version =>
+        // Only test patchable versions that were actually compiled
+        val compiledPatchableVersions = patchableVersions.filter(v =>
+          example.compilationResult.results.get(v).exists(_.success))
+
+        // Test pre-patched versions - should have Unsafe warning
+        compiledPatchableVersions.foreach { version =>
           example.compilationResult.results.get(version).foreach { versionResult =>
             if (versionResult.success) {
               log(s"  Testing pre-patched $version runtime")
@@ -355,8 +370,8 @@ class BytecodePatchingTests extends FunSuite with ExampleLoader {
           }
         }
 
-        // Test patched versions (3.3-3.7 → 3.8) - should NOT have Unsafe warning
-        patchableVersions.foreach { version =>
+        // Test patched versions - should NOT have Unsafe warning
+        compiledPatchableVersions.foreach { version =>
           patchAllClassFilesForVersion(example, version) match {
             case Right(patchedFilesMap) if patchedFilesMap.nonEmpty =>
               log(s"  Testing patched $version runtime")
@@ -364,8 +379,11 @@ class BytecodePatchingTests extends FunSuite with ExampleLoader {
               // Use the patched workspace root for this example/version (not the file's parent,
               // which would be wrong for classes in packages like foo.package$)
               val outputDir = patchedWorkspace / example.name / version
-              val targetDir = testWorkspace / example.name / version
-              val scalaLibClasspath = getScalaCliClasspath(targetDir, version)
+              // 3.0-3.1 patched code generates full 3.8+ patterns needing NullValue$, Evaluating$, etc.
+              // Use 3.8+ classpath for those versions
+              val classpathVersion = if (needsTargetRuntime(version)) targetVersion else version
+              val targetDir = testWorkspace / example.name / classpathVersion
+              val scalaLibClasspath = getScalaCliClasspath(targetDir, classpathVersion)
               val (exitCode, stdout, stderr) = runWithJava(outputDir, scalaLibClasspath, mainClassName)
 
               // Verify correct output
@@ -427,7 +445,9 @@ class BytecodePatchingTests extends FunSuite with ExampleLoader {
       if (example.metadata.expectedClasses.exists(_.lazyVals.nonEmpty)) {
         log(s"\n[${example.name}] Testing idempotency")
 
-        patchableVersions.headOption.foreach { version =>
+        val compiledPatchableVersions = patchableVersions.filter(v =>
+          example.compilationResult.results.get(v).exists(_.success))
+        compiledPatchableVersions.headOption.foreach { version =>
           patchAllClassFilesForVersion(example, version) match {
             case Right(patchedFilesMap) if patchedFilesMap.nonEmpty =>
               // Try patching the patched files again - read them back and group
@@ -467,7 +487,7 @@ class BytecodePatchingTests extends FunSuite with ExampleLoader {
 
   /** Test: Non-patchable versions return NotApplicable */
   test("Non-patchable versions return NotApplicable") {
-    val nonPatchableVersions = Set("3.0.2", "3.1.3", "3.2.2", targetVersion)
+    val nonPatchableVersions = Set("3.2.2", targetVersion)
 
     examples.foreach { example =>
       if (example.metadata.expectedClasses.exists(_.lazyVals.nonEmpty)) {

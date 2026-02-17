@@ -105,10 +105,37 @@ object BytecodePatcher {
 
       // Dispatch to version-specific patching based on what we found
       version match {
-        case ScalaVersion.Scala30x_31x | ScalaVersion.Scala32x =>
-          // Not implemented yet for these versions
-          if (objectLazyVals.nonEmpty) patchScala30x_31x(companionObjectBytes, companionObjectInfo, objectLazyVals, companionObjectName)
-          else if (classLazyVals.nonEmpty) patchScala30x_31x(classBytes, classInfo, classLazyVals, className)
+        case ScalaVersion.Scala30x_31x =>
+          // Handle different companion pair scenarios for 3.0-3.1
+          (objectLazyVals.nonEmpty, classLazyVals.nonEmpty) match {
+            case (true, false) =>
+              // Only object has lazy vals - companion class has OFFSET field
+              patchScala30x_31x(
+                companionObjectBytes,
+                companionObjectInfo,
+                objectLazyVals,
+                companionObjectName,
+                Some((className, classInfo, classBytes))
+              )
+            case (false, true) =>
+              // Only class has lazy vals - patch as standalone
+              patchScala30x_31x(classBytes, classInfo, classLazyVals, className)
+            case (true, true) =>
+              // BOTH have lazy vals - need to patch both independently
+              patchCompanionPairBothHaveLazyVals30x_31x(
+                companionObjectName, className,
+                companionObjectInfo, classInfo,
+                companionObjectBytes, classBytes,
+                objectLazyVals, classLazyVals
+              )
+            case (false, false) =>
+              PatchResult.NotApplicable
+          }
+
+        case ScalaVersion.Scala32x =>
+          // Not implemented yet for 3.2
+          if (objectLazyVals.nonEmpty) patchScala32x(companionObjectBytes, companionObjectInfo, objectLazyVals, companionObjectName)
+          else if (classLazyVals.nonEmpty) patchScala32x(classBytes, classInfo, classLazyVals, className)
           else PatchResult.NotApplicable
 
         case ScalaVersion.Scala33x_37x =>
@@ -154,17 +181,783 @@ object BytecodePatcher {
 
   /** Patches Scala 3.0-3.1 lazy vals to 3.8+ format.
     *
-    * NOT YET IMPLEMENTED.
+    * Transforms bitmap-based lazy vals with inline initialization to VarHandle-based
+    * implementation with separate lzyINIT methods, matching the 3.8+ pattern.
     *
-    * Scala 3.0-3.1 uses a field-based approach with bitmap for initialization tracking.
+    * @param companionInfo
+    *   Optional tuple of (className, classInfo, classBytes) for companion class that contains OFFSET fields
     */
   private def patchScala30x_31x(
       bytes: Array[Byte],
       classInfo: lazyvalgrade.classfile.ClassInfo,
       lazyVals: Seq[LazyValInfo],
-      name: String
+      name: String,
+      companionInfo: Option[(String, lazyvalgrade.classfile.ClassInfo, Array[Byte])] = None
   ): PatchResult = {
-    PatchResult.Failed("Scala 3.0-3.1 lazy val patching is not yet implemented")
+    try {
+      companionInfo match {
+        case Some((companionClassName, companionClassInfo, companionClassBytes)) =>
+          // Companion object with OFFSET fields in companion class
+          // 1. Patch companion class: remove OFFSET field and its clinit init
+          val companionReader = new ClassReader(companionClassBytes)
+          val companionClassNode = new ClassNode(ASM9)
+          companionReader.accept(companionClassNode, ClassReader.EXPAND_FRAMES)
+
+          patchCompanionClass30x_31x(companionClassNode)
+
+          val companionWriter = new ClassWriter(ClassWriter.COMPUTE_FRAMES)
+          companionClassNode.accept(companionWriter)
+          val patchedClassBytes = companionWriter.toByteArray
+
+          // 2. Patch companion object: full transformation
+          val objectReader = new ClassReader(bytes)
+          val objectNode = new ClassNode(ASM9)
+          objectReader.accept(objectNode, ClassReader.EXPAND_FRAMES)
+
+          patchClassNode30x_31x(objectNode, classInfo.name, lazyVals)
+
+          val objectWriter = new ClassWriter(ClassWriter.COMPUTE_FRAMES)
+          objectNode.accept(objectWriter)
+          val patchedObjectBytes = objectWriter.toByteArray
+
+          PatchResult.PatchedPair(name, companionClassName, patchedObjectBytes, patchedClassBytes)
+
+        case None =>
+          // Standalone class/object
+          val reader = new ClassReader(bytes)
+          val classNode = new ClassNode(ASM9)
+          reader.accept(classNode, ClassReader.EXPAND_FRAMES)
+
+          patchClassNode30x_31x(classNode, classInfo.name, lazyVals)
+
+          val writer = new ClassWriter(ClassWriter.COMPUTE_FRAMES)
+          classNode.accept(writer)
+          val patchedBytes = writer.toByteArray
+
+          PatchResult.PatchedSingle(name, patchedBytes)
+      }
+    } catch {
+      case e: Exception =>
+        e.printStackTrace()
+        PatchResult.Failed(s"Patching failed: ${e.getMessage}")
+    }
+  }
+
+  /** Patches companion pair where BOTH class and object have lazy vals (3.0-3.1). */
+  private def patchCompanionPairBothHaveLazyVals30x_31x(
+      companionObjectName: String,
+      className: String,
+      companionObjectInfo: lazyvalgrade.classfile.ClassInfo,
+      classInfo: lazyvalgrade.classfile.ClassInfo,
+      companionObjectBytes: Array[Byte],
+      classBytes: Array[Byte],
+      objectLazyVals: Seq[LazyValInfo],
+      classLazyVals: Seq[LazyValInfo]
+  ): PatchResult = {
+    try {
+      // Step 1: Patch object (which also patches class to remove OFFSET fields)
+      val objectPatchResult = patchScala30x_31x(
+        companionObjectBytes,
+        companionObjectInfo,
+        objectLazyVals,
+        companionObjectName,
+        Some((className, classInfo, classBytes))
+      )
+
+      objectPatchResult match {
+        case PatchResult.PatchedPair(_, _, patchedObjectBytes, intermediatePatchedClassBytes) =>
+          // Step 2: Parse the intermediate patched class bytes and patch again for class's own lazy vals
+          val intermediateClassInfo = ClassfileParser.parse(intermediatePatchedClassBytes).toOption.get
+          val reader = new ClassReader(intermediatePatchedClassBytes)
+          val classNode = new ClassNode(ASM9)
+          reader.accept(classNode, ClassReader.EXPAND_FRAMES)
+
+          patchClassNode30x_31x(classNode, className, classLazyVals)
+
+          val writer = new ClassWriter(ClassWriter.COMPUTE_FRAMES)
+          classNode.accept(writer)
+          val finalPatchedClassBytes = writer.toByteArray
+
+          PatchResult.PatchedPair(companionObjectName, className, patchedObjectBytes, finalPatchedClassBytes)
+
+        case PatchResult.Failed(err) =>
+          PatchResult.Failed(s"Failed to patch companion object: $err")
+        case _ =>
+          PatchResult.Failed("Unexpected result when patching companion object")
+      }
+    } catch {
+      case e: Exception =>
+        e.printStackTrace()
+        PatchResult.Failed(s"Patching failed for companion pair: ${e.getMessage}")
+    }
+  }
+
+  /** Patches companion class for 3.0-3.1: removes OFFSET fields and their clinit initialization. */
+  private def patchCompanionClass30x_31x(classNode: ClassNode): Unit = {
+    // Remove OFFSET fields (OFFSET$_m_N pattern)
+    val fieldsToRemove = classNode.fields.asScala.filter { field =>
+      field.desc == "J" && field.name.matches("OFFSET\\$_m_\\d+")
+    }.toSeq
+    fieldsToRemove.foreach(classNode.fields.remove)
+
+    // Remove OFFSET initialization from <clinit>
+    classNode.methods.asScala.find(_.name == "<clinit>").foreach { clinit =>
+      val instructions = clinit.instructions
+      val toRemove = scala.collection.mutable.ListBuffer[AbstractInsnNode]()
+
+      var current = instructions.getFirst
+      while (current != null) {
+        current match {
+          case fieldInsn: FieldInsnNode
+            if fieldInsn.getOpcode == PUTSTATIC &&
+               fieldInsn.desc == "J" &&
+               fieldInsn.name.matches("OFFSET\\$_m_\\d+") =>
+            // Found PUTSTATIC for OFFSET$_m_N. Walk backwards to find GETSTATIC LazyVals$.MODULE$
+            var prev = current.getPrevious
+            var removeCount = 0
+            while (prev != null && removeCount < 10) {
+              prev match {
+                case gs: FieldInsnNode if gs.getOpcode == GETSTATIC &&
+                    gs.owner == "scala/runtime/LazyVals$" && gs.name == "MODULE$" =>
+                  var temp = prev
+                  while (temp != null && temp != current.getNext) {
+                    toRemove += temp
+                    temp = temp.getNext
+                  }
+                  removeCount = 999
+                  prev = null
+                case _ =>
+                  removeCount += 1
+                  prev = prev.getPrevious
+              }
+            }
+          case _ =>
+        }
+        current = current.getNext
+      }
+
+      toRemove.foreach(instructions.remove)
+    }
+  }
+
+  /** Core patching logic for Scala 3.0-3.1 lazy vals.
+    *
+    * Transforms bitmap-based inline initialization to VarHandle-based with separate lzyINIT methods.
+    */
+  private def patchClassNode30x_31x(classNode: ClassNode, className: String, lazyVals: Seq[LazyValInfo]): Unit = {
+    val classInternalName = className.replace('.', '/')
+
+    // Step 1: Field transformations
+    // Remove OFFSET fields
+    val offsetFields = classNode.fields.asScala.filter { field =>
+      field.desc == "J" && (field.name.matches("OFFSET\\$_m_\\d+") || field.name.matches("OFFSET\\$\\d+"))
+    }.toSeq
+    offsetFields.foreach(classNode.fields.remove)
+
+    // Remove bitmap fields
+    val bitmapFields = classNode.fields.asScala.filter { field =>
+      field.desc == "J" && field.name.matches("\\d+bitmap\\$\\d+")
+    }.toSeq
+    bitmapFields.foreach(classNode.fields.remove)
+
+    // Collect original storage field descriptors before modifying
+    val storageFieldDescriptors = lazyVals.map { lv =>
+      val storageFieldName = s"${lv.name}$$lzy${lv.index}"
+      val field = classNode.fields.asScala.find(_.name == storageFieldName)
+      val originalDesc = field.map(_.desc).getOrElse(lv.storageField.descriptor)
+      (lv, storageFieldName, originalDesc)
+    }
+
+    // Transform storage fields: change to private volatile Object, remove ACC_STATIC
+    storageFieldDescriptors.foreach { case (lv, storageFieldName, _) =>
+      classNode.fields.asScala.find(_.name == storageFieldName).foreach { field =>
+        field.desc = "Ljava/lang/Object;"
+        field.access = ACC_PRIVATE | ACC_VOLATILE
+      }
+    }
+
+    // Add VarHandle fields
+    storageFieldDescriptors.foreach { case (lv, storageFieldName, _) =>
+      val varHandleName = s"${storageFieldName}$$lzyHandle"
+      if (!classNode.fields.asScala.exists(_.name == varHandleName)) {
+        classNode.fields.add(new FieldNode(
+          ASM9,
+          ACC_PRIVATE | ACC_STATIC | ACC_FINAL,
+          varHandleName,
+          "Ljava/lang/invoke/VarHandle;",
+          null,
+          null
+        ))
+      }
+    }
+
+    // Step 2: Replace <clinit>
+    val clinitOpt = classNode.methods.asScala.find(_.name == "<clinit>")
+    clinitOpt match {
+      case Some(clinit) =>
+        patchClinit30x_31x(clinit, classInternalName, storageFieldDescriptors)
+      case None =>
+        // Create new <clinit>
+        val clinit = new MethodNode(ASM9, ACC_STATIC, "<clinit>", "()V", null, null)
+        addVarHandleInits(clinit.instructions, classInternalName, storageFieldDescriptors)
+        clinit.instructions.add(new InsnNode(RETURN))
+        classNode.methods.add(clinit)
+    }
+
+    // Step 3: For each lazy val, extract computation, replace accessor, generate lzyINIT
+    storageFieldDescriptors.foreach { case (lv, storageFieldName, originalDesc) =>
+      val accessorName = lv.name
+      val varHandleName = s"${storageFieldName}$$lzyHandle"
+      val lzyInitName = s"${lv.name}$$lzyINIT${lv.index}"
+
+      // Find the old accessor method
+      classNode.methods.asScala.find(_.name == accessorName).foreach { accessor =>
+        // Extract computation instructions from the old accessor
+        val computation = extractComputation30x_31x(accessor)
+
+        // Replace accessor body with 3.8+ pattern
+        replaceAccessor30x_31x(accessor, classInternalName, storageFieldName, varHandleName,
+          lzyInitName, originalDesc)
+
+        // Generate lzyINIT method
+        val lzyInit = generateLzyInit30x_31x(classInternalName, storageFieldName, varHandleName,
+          lzyInitName, originalDesc, computation)
+        classNode.methods.add(lzyInit)
+      }
+    }
+
+    // Step 4: Add inner class references for 3.8+ lazy val types
+    addLazyValInnerClasses(classNode)
+  }
+
+  /** Extracts the computation instructions from a 3.0-3.1 accessor method.
+    *
+    * In 3.0-3.1 bytecode, the computation is between the CAS IFEQ and either:
+    * - The first store to slot 5 (xSTORE 5) for normal computations
+    * - The end of the try-catch block (for computations that always throw)
+    *
+    * Returns cloned instructions with a proper label map so that JumpInsnNodes work correctly.
+    */
+  private def extractComputation30x_31x(accessor: MethodNode): Seq[AbstractInsnNode] = {
+    val instructions = accessor.instructions
+
+    // Find the CAS call
+    var current = instructions.getFirst
+    var casNode: MethodInsnNode = null
+    while (current != null && casNode == null) {
+      current match {
+        case m: MethodInsnNode if m.owner == "scala/runtime/LazyVals$" && m.name == "CAS" =>
+          casNode = m
+        case _ =>
+      }
+      current = current.getNext
+    }
+
+    if (casNode == null) return Seq.empty
+
+    // After CAS: IFEQ target
+    val ifeq = casNode.getNext
+    if (ifeq == null || !ifeq.isInstanceOf[JumpInsnNode]) return Seq.empty
+
+    // Find the try-catch block that covers the computation (handler calls setFlag)
+    // This gives us the boundary for always-throwing computations
+    val tryCatchEndLabels: Set[LabelNode] = accessor.tryCatchBlocks.asScala.collect {
+      case tcb if {
+        // Check if handler code calls setFlag (indicating it's the lazy val exception handler)
+        var n = tcb.handler.getNext
+        var isSetFlagHandler = false
+        var checked = 0
+        while (n != null && checked < 10 && !isSetFlagHandler) {
+          n match {
+            case m: MethodInsnNode if m.owner == "scala/runtime/LazyVals$" && m.name == "setFlag" =>
+              isSetFlagHandler = true
+            case _ =>
+          }
+          n = n.getNext
+          checked += 1
+        }
+        isSetFlagHandler
+      } => tcb.end
+    }.toSet
+
+    // First pass: collect raw instructions (including labels) up to xSTORE 5 or try-catch end
+    val rawInsns = scala.collection.mutable.ArrayBuffer[AbstractInsnNode]()
+    current = ifeq.getNext
+    var done = false
+    while (current != null && !done) {
+      current match {
+        case v: VarInsnNode if v.`var` == 5 && isStoreOpcode(v.getOpcode) =>
+          done = true
+        case l: LabelNode if tryCatchEndLabels.contains(l) =>
+          // Reached the end of the computation try-catch block (always-throwing case)
+          done = true
+        case _ =>
+          rawInsns += current
+          current = current.getNext
+      }
+    }
+
+    // Build label clone map from all labels in the extracted range
+    val labelMap = new java.util.HashMap[LabelNode, LabelNode]()
+    rawInsns.foreach {
+      case l: LabelNode => labelMap.put(l, new LabelNode())
+      case _ =>
+    }
+
+    // Second pass: clone instructions (skip FrameNodes which are recomputed by COMPUTE_FRAMES)
+    rawInsns.flatMap {
+      case _: FrameNode => None
+      case insn => Some(insn.clone(labelMap))
+    }.toSeq
+  }
+
+  /** Checks if an opcode is a store instruction. */
+  private def isStoreOpcode(opcode: Int): Boolean =
+    opcode == ISTORE || opcode == LSTORE || opcode == FSTORE || opcode == DSTORE || opcode == ASTORE
+
+  /** Replaces a 3.0-3.1 accessor body with the 3.8+ accessor pattern. */
+  private def replaceAccessor30x_31x(
+      accessor: MethodNode,
+      classInternalName: String,
+      storageFieldName: String,
+      varHandleName: String,
+      lzyInitName: String,
+      originalDesc: String
+  ): Unit = {
+    val typeInfo = getTypeInfo(originalDesc)
+    accessor.instructions.clear()
+    accessor.tryCatchBlocks.clear()
+    accessor.localVariables = new java.util.ArrayList()
+    accessor.maxStack = 2
+    accessor.maxLocals = 2
+
+    val insns = accessor.instructions
+    val lNullCheck = new LabelNode()
+    val lInit = new LabelNode()
+
+    // ALOAD 0
+    insns.add(new VarInsnNode(ALOAD, 0))
+    // GETFIELD storage
+    insns.add(new FieldInsnNode(GETFIELD, classInternalName, storageFieldName, "Ljava/lang/Object;"))
+    // ASTORE 1
+    insns.add(new VarInsnNode(ASTORE, 1))
+    // ALOAD 1
+    insns.add(new VarInsnNode(ALOAD, 1))
+    // INSTANCEOF <type>
+    insns.add(new TypeInsnNode(INSTANCEOF, typeInfo.instanceOfType))
+    // IFEQ lNullCheck
+    insns.add(new JumpInsnNode(IFEQ, lNullCheck))
+    // ALOAD 1
+    insns.add(new VarInsnNode(ALOAD, 1))
+    // unbox/checkcast + return
+    typeInfo.addUnboxOrCast(insns)
+    insns.add(new InsnNode(typeInfo.returnOpcode))
+
+    // lNullCheck:
+    insns.add(lNullCheck)
+    // ALOAD 1
+    insns.add(new VarInsnNode(ALOAD, 1))
+    // GETSTATIC LazyVals$NullValue$.MODULE$
+    insns.add(new FieldInsnNode(GETSTATIC, "scala/runtime/LazyVals$NullValue$", "MODULE$",
+      "Lscala/runtime/LazyVals$NullValue$;"))
+    // IF_ACMPNE lInit
+    insns.add(new JumpInsnNode(IF_ACMPNE, lInit))
+
+    if (typeInfo.isPrimitive) {
+      // ACONST_NULL + unbox + return (for primitives, unboxToInt(null) returns 0)
+      insns.add(new InsnNode(ACONST_NULL))
+      typeInfo.addUnboxOrCast(insns)
+      insns.add(new InsnNode(typeInfo.returnOpcode))
+    } else {
+      // ACONST_NULL + ARETURN
+      insns.add(new InsnNode(ACONST_NULL))
+      insns.add(new InsnNode(ARETURN))
+    }
+
+    // lInit:
+    insns.add(lInit)
+    // ALOAD 0
+    insns.add(new VarInsnNode(ALOAD, 0))
+    // INVOKESPECIAL lzyINIT
+    insns.add(new MethodInsnNode(INVOKESPECIAL, classInternalName, lzyInitName,
+      "()Ljava/lang/Object;", false))
+    // unbox/checkcast + return
+    typeInfo.addUnboxOrCast(insns)
+    insns.add(new InsnNode(typeInfo.returnOpcode))
+  }
+
+  /** Generates a 3.8+ lzyINIT method with embedded computation from old 3.0-3.1 accessor.
+    *
+    * Follows the exact 3.8+ pattern: CAS loop with Evaluating$/Waiting/NullValue$ sentinels.
+    */
+  private def generateLzyInit30x_31x(
+      classInternalName: String,
+      storageFieldName: String,
+      varHandleName: String,
+      lzyInitName: String,
+      originalDesc: String,
+      computation: Seq[AbstractInsnNode]
+  ): MethodNode = {
+    val typeInfo = getTypeInfo(originalDesc)
+    val method = new MethodNode(ASM9, ACC_PRIVATE, lzyInitName, "()Ljava/lang/Object;", null, null)
+    val insns = method.instructions
+
+    // Labels
+    val lNonNull = new LabelNode()       // jump target when value is non-null
+    val lCasFailed = new LabelNode()      // CAS null→Evaluating failed, goto 0
+    val lNullMapping = new LabelNode()    // null→NullValue$ mapping
+    val lAfterCompute = new LabelNode()   // after computation block
+    val lExHandler = new LabelNode()      // exception handler
+    val lExCasOk = new LabelNode()        // in exception handler, CAS succeeded
+    val lSuccessCasOk = new LabelNode()   // in success path, CAS succeeded
+    val lReturnResult = new LabelNode()   // return aload_3
+    val lLoopBack = new LabelNode()       // goto 0 (loop back)
+    val lCheckEvaluating = new LabelNode() // check if Evaluating$
+    val lCheckWaiting = new LabelNode()   // check if Waiting
+    val lReturnNull = new LabelNode()     // return null (unknown LazyValControlState)
+    val lReturnVal = new LabelNode()      // return non-control-state value
+
+    // Start of method (offset 0) — the loop target
+    val lStart = new LabelNode()
+    insns.add(lStart)
+
+    // ALOAD 0; GETFIELD storage; ASTORE 1
+    insns.add(new VarInsnNode(ALOAD, 0))
+    insns.add(new FieldInsnNode(GETFIELD, classInternalName, storageFieldName, "Ljava/lang/Object;"))
+    insns.add(new VarInsnNode(ASTORE, 1))
+
+    // ALOAD 1; IFNONNULL lNonNull
+    insns.add(new VarInsnNode(ALOAD, 1))
+    insns.add(new JumpInsnNode(IFNONNULL, lNonNull))
+
+    // CAS null → Evaluating$
+    insns.add(new FieldInsnNode(GETSTATIC, classInternalName, varHandleName, "Ljava/lang/invoke/VarHandle;"))
+    insns.add(new VarInsnNode(ALOAD, 0))
+    insns.add(new InsnNode(ACONST_NULL))
+    insns.add(new FieldInsnNode(GETSTATIC, "scala/runtime/LazyVals$Evaluating$", "MODULE$",
+      "Lscala/runtime/LazyVals$Evaluating$;"))
+    insns.add(new MethodInsnNode(INVOKEVIRTUAL, "java/lang/invoke/VarHandle", "compareAndSet",
+      "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z", false))
+    insns.add(new JumpInsnNode(IFEQ, lCasFailed))
+
+    // CAS succeeded: compute value
+    // ACONST_NULL; ASTORE 2 (result holder)
+    insns.add(new InsnNode(ACONST_NULL))
+    insns.add(new VarInsnNode(ASTORE, 2))
+    // ACONST_NULL; ASTORE 3 (computation result for return)
+    insns.add(new InsnNode(ACONST_NULL))
+    insns.add(new VarInsnNode(ASTORE, 3))
+
+    // Try block starts here
+    val lTryStart = new LabelNode()
+    insns.add(lTryStart)
+
+    // Embedded computation → box if needed → ASTORE 3
+    // Instructions are already cloned during extraction
+    computation.foreach(insn => insns.add(insn))
+    if (typeInfo.isPrimitive) {
+      typeInfo.addBox(insns)
+    }
+    insns.add(new VarInsnNode(ASTORE, 3))
+
+    // null → NullValue$ mapping: ALOAD 3; IFNONNULL lNullMapping
+    insns.add(new VarInsnNode(ALOAD, 3))
+    insns.add(new JumpInsnNode(IFNONNULL, lNullMapping))
+    insns.add(new FieldInsnNode(GETSTATIC, "scala/runtime/LazyVals$NullValue$", "MODULE$",
+      "Lscala/runtime/LazyVals$NullValue$;"))
+    insns.add(new VarInsnNode(ASTORE, 2))
+    insns.add(new JumpInsnNode(GOTO, lAfterCompute))
+
+    // lNullMapping: value was non-null
+    insns.add(lNullMapping)
+    insns.add(new VarInsnNode(ALOAD, 3))
+    insns.add(new VarInsnNode(ASTORE, 2))
+
+    // lAfterCompute: success path — CAS Evaluating$ → result
+    insns.add(lAfterCompute)
+    insns.add(new JumpInsnNode(GOTO, lSuccessCasOk))
+
+    // Exception handler
+    insns.add(lExHandler)
+    insns.add(new VarInsnNode(ASTORE, 4))
+
+    // CAS Evaluating$ → result (in exception handler, result is still in slot 2)
+    insns.add(new FieldInsnNode(GETSTATIC, classInternalName, varHandleName, "Ljava/lang/invoke/VarHandle;"))
+    insns.add(new VarInsnNode(ALOAD, 0))
+    insns.add(new FieldInsnNode(GETSTATIC, "scala/runtime/LazyVals$Evaluating$", "MODULE$",
+      "Lscala/runtime/LazyVals$Evaluating$;"))
+    insns.add(new VarInsnNode(ALOAD, 2))
+    insns.add(new MethodInsnNode(INVOKEVIRTUAL, "java/lang/invoke/VarHandle", "compareAndSet",
+      "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z", false))
+    insns.add(new JumpInsnNode(IFNE, lExCasOk))
+
+    // Exception handler: CAS failed, need to countDown Waiting
+    insns.add(new VarInsnNode(ALOAD, 0))
+    insns.add(new FieldInsnNode(GETFIELD, classInternalName, storageFieldName, "Ljava/lang/Object;"))
+    insns.add(new TypeInsnNode(CHECKCAST, "scala/runtime/LazyVals$Waiting"))
+    insns.add(new VarInsnNode(ASTORE, 5))
+    insns.add(new FieldInsnNode(GETSTATIC, classInternalName, varHandleName, "Ljava/lang/invoke/VarHandle;"))
+    insns.add(new VarInsnNode(ALOAD, 0))
+    insns.add(new VarInsnNode(ALOAD, 5))
+    insns.add(new VarInsnNode(ALOAD, 2))
+    insns.add(new MethodInsnNode(INVOKEVIRTUAL, "java/lang/invoke/VarHandle", "compareAndSet",
+      "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z", false))
+    insns.add(new InsnNode(POP))
+    insns.add(new VarInsnNode(ALOAD, 5))
+    insns.add(new MethodInsnNode(INVOKEVIRTUAL, "scala/runtime/LazyVals$Waiting", "countDown", "()V", false))
+
+    // lExCasOk: rethrow exception
+    insns.add(lExCasOk)
+    insns.add(new VarInsnNode(ALOAD, 4))
+    insns.add(new InsnNode(ATHROW))
+
+    // Success path: CAS Evaluating$ → result
+    val lSuccessStart = new LabelNode()
+    insns.add(lSuccessStart)
+    insns.add(lSuccessCasOk)
+    insns.add(new FieldInsnNode(GETSTATIC, classInternalName, varHandleName, "Ljava/lang/invoke/VarHandle;"))
+    insns.add(new VarInsnNode(ALOAD, 0))
+    insns.add(new FieldInsnNode(GETSTATIC, "scala/runtime/LazyVals$Evaluating$", "MODULE$",
+      "Lscala/runtime/LazyVals$Evaluating$;"))
+    insns.add(new VarInsnNode(ALOAD, 2))
+    insns.add(new MethodInsnNode(INVOKEVIRTUAL, "java/lang/invoke/VarHandle", "compareAndSet",
+      "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z", false))
+    insns.add(new JumpInsnNode(IFNE, lReturnResult))
+
+    // Success CAS failed: countDown Waiting and return
+    insns.add(new VarInsnNode(ALOAD, 0))
+    insns.add(new FieldInsnNode(GETFIELD, classInternalName, storageFieldName, "Ljava/lang/Object;"))
+    insns.add(new TypeInsnNode(CHECKCAST, "scala/runtime/LazyVals$Waiting"))
+    insns.add(new VarInsnNode(ASTORE, 5))
+    insns.add(new FieldInsnNode(GETSTATIC, classInternalName, varHandleName, "Ljava/lang/invoke/VarHandle;"))
+    insns.add(new VarInsnNode(ALOAD, 0))
+    insns.add(new VarInsnNode(ALOAD, 5))
+    insns.add(new VarInsnNode(ALOAD, 2))
+    insns.add(new MethodInsnNode(INVOKEVIRTUAL, "java/lang/invoke/VarHandle", "compareAndSet",
+      "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z", false))
+    insns.add(new InsnNode(POP))
+    insns.add(new VarInsnNode(ALOAD, 5))
+    insns.add(new MethodInsnNode(INVOKEVIRTUAL, "scala/runtime/LazyVals$Waiting", "countDown", "()V", false))
+
+    // lReturnResult: return slot 3
+    insns.add(lReturnResult)
+    insns.add(new VarInsnNode(ALOAD, 3))
+    insns.add(new InsnNode(ARETURN))
+
+    // lCasFailed: loop back
+    insns.add(lCasFailed)
+    insns.add(new JumpInsnNode(GOTO, lStart))
+
+    // lNonNull: check if LazyValControlState
+    insns.add(lNonNull)
+    insns.add(new VarInsnNode(ALOAD, 1))
+    insns.add(new TypeInsnNode(INSTANCEOF, "scala/runtime/LazyVals$LazyValControlState"))
+    insns.add(new JumpInsnNode(IFEQ, lReturnVal))
+
+    // Check Evaluating$
+    insns.add(new VarInsnNode(ALOAD, 1))
+    insns.add(new FieldInsnNode(GETSTATIC, "scala/runtime/LazyVals$Evaluating$", "MODULE$",
+      "Lscala/runtime/LazyVals$Evaluating$;"))
+    insns.add(new JumpInsnNode(IF_ACMPNE, lCheckWaiting))
+
+    // Is Evaluating$: CAS Evaluating$ → new Waiting, loop back
+    insns.add(new FieldInsnNode(GETSTATIC, classInternalName, varHandleName, "Ljava/lang/invoke/VarHandle;"))
+    insns.add(new VarInsnNode(ALOAD, 0))
+    insns.add(new VarInsnNode(ALOAD, 1))
+    insns.add(new TypeInsnNode(NEW, "scala/runtime/LazyVals$Waiting"))
+    insns.add(new InsnNode(DUP))
+    insns.add(new MethodInsnNode(INVOKESPECIAL, "scala/runtime/LazyVals$Waiting", "<init>", "()V", false))
+    insns.add(new MethodInsnNode(INVOKEVIRTUAL, "java/lang/invoke/VarHandle", "compareAndSet",
+      "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z", false))
+    insns.add(new InsnNode(POP))
+    insns.add(new JumpInsnNode(GOTO, lStart))
+
+    // lCheckWaiting: check Waiting
+    insns.add(lCheckWaiting)
+    insns.add(new VarInsnNode(ALOAD, 1))
+    insns.add(new TypeInsnNode(INSTANCEOF, "scala/runtime/LazyVals$Waiting"))
+    insns.add(new JumpInsnNode(IFEQ, lReturnNull))
+
+    // Is Waiting: await and loop back
+    insns.add(new VarInsnNode(ALOAD, 1))
+    insns.add(new TypeInsnNode(CHECKCAST, "scala/runtime/LazyVals$Waiting"))
+    insns.add(new MethodInsnNode(INVOKEVIRTUAL, "scala/runtime/LazyVals$Waiting", "await", "()V", false))
+    insns.add(new JumpInsnNode(GOTO, lStart))
+
+    // lReturnNull: unknown control state, return null
+    insns.add(lReturnNull)
+    insns.add(new InsnNode(ACONST_NULL))
+    insns.add(new InsnNode(ARETURN))
+
+    // lReturnVal: not a control state, return the value
+    insns.add(lReturnVal)
+    insns.add(new VarInsnNode(ALOAD, 1))
+    insns.add(new InsnNode(ARETURN))
+
+    // Exception table: try block covers computation
+    method.tryCatchBlocks.add(new TryCatchBlockNode(lTryStart, lExHandler, lExHandler, null))
+
+    method.maxStack = 5
+    method.maxLocals = 6
+
+    method
+  }
+
+  /** Patches <clinit> for 3.0-3.1: removes OFFSET initialization, adds VarHandle initialization.
+    * Preserves MODULE$ initialization for objects.
+    */
+  private def patchClinit30x_31x(
+      clinit: MethodNode,
+      classInternalName: String,
+      storageFieldDescriptors: Seq[(LazyValInfo, String, String)]
+  ): Unit = {
+    val instructions = clinit.instructions
+
+    // Remove entire getOffset sequence: GETSTATIC LazyVals$.MODULE$ ... PUTSTATIC OFFSET$*
+    val toRemove = scala.collection.mutable.ArrayBuffer[AbstractInsnNode]()
+
+    var current = instructions.getFirst
+    while (current != null) {
+      current match {
+        case putStatic: FieldInsnNode
+          if putStatic.getOpcode == PUTSTATIC &&
+             putStatic.desc == "J" &&
+             (putStatic.name.matches("OFFSET\\$_m_\\d+") || putStatic.name.matches("OFFSET\\$\\d+")) =>
+          // Walk backwards to find GETSTATIC LazyVals$.MODULE$
+          var prev = current.getPrevious
+          var count = 0
+          while (prev != null && count < 10) {
+            prev match {
+              case gs: FieldInsnNode if gs.getOpcode == GETSTATIC &&
+                  gs.owner == "scala/runtime/LazyVals$" && gs.name == "MODULE$" =>
+                // Found start, collect everything from here to putStatic
+                var temp = prev
+                while (temp != null && temp != current.getNext) {
+                  toRemove += temp
+                  temp = temp.getNext
+                }
+                count = 999
+                prev = null
+              case _ =>
+                count += 1
+                prev = prev.getPrevious
+            }
+          }
+        case _ =>
+      }
+      current = current.getNext
+    }
+    toRemove.foreach(instructions.remove)
+
+    // Insert VarHandle initialization at the beginning (before MODULE$ init for objects)
+    val firstInsn = instructions.getFirst
+    if (firstInsn != null) {
+      val initInsns = new InsnList()
+      addVarHandleInits(initInsns, classInternalName, storageFieldDescriptors)
+      instructions.insertBefore(firstInsn, initInsns)
+    } else {
+      addVarHandleInits(instructions, classInternalName, storageFieldDescriptors)
+      instructions.add(new InsnNode(RETURN))
+    }
+  }
+
+  /** Adds VarHandle field initialization instructions. */
+  private def addVarHandleInits(
+      insns: InsnList,
+      classInternalName: String,
+      storageFieldDescriptors: Seq[(LazyValInfo, String, String)]
+  ): Unit = {
+    storageFieldDescriptors.foreach { case (lv, storageFieldName, _) =>
+      val varHandleName = s"${storageFieldName}$$lzyHandle"
+
+      // MethodHandles.lookup()
+      insns.add(new MethodInsnNode(INVOKESTATIC, "java/lang/invoke/MethodHandles", "lookup",
+        "()Ljava/lang/invoke/MethodHandles$Lookup;", false))
+      // LDC <Class>
+      insns.add(new LdcInsnNode(org.objectweb.asm.Type.getObjectType(classInternalName)))
+      // LDC <FieldName>
+      insns.add(new LdcInsnNode(storageFieldName))
+      // LDC Object.class
+      insns.add(new LdcInsnNode(org.objectweb.asm.Type.getType("Ljava/lang/Object;")))
+      // findVarHandle
+      insns.add(new MethodInsnNode(INVOKEVIRTUAL, "java/lang/invoke/MethodHandles$Lookup",
+        "findVarHandle",
+        "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/VarHandle;", false))
+      // PUTSTATIC
+      insns.add(new FieldInsnNode(PUTSTATIC, classInternalName, varHandleName,
+        "Ljava/lang/invoke/VarHandle;"))
+    }
+  }
+
+  /** Adds inner class references required for 3.8+ lazy val implementation. */
+  private def addLazyValInnerClasses(classNode: ClassNode): Unit = {
+    val innerClassesToAdd = Seq(
+      ("java/lang/invoke/MethodHandles$Lookup", "java/lang/invoke/MethodHandles", "Lookup",
+        ACC_PUBLIC | ACC_FINAL | ACC_STATIC),
+      ("scala/runtime/LazyVals$Evaluating$", "scala/runtime/LazyVals", "Evaluating$",
+        ACC_PUBLIC | ACC_FINAL | ACC_STATIC),
+      ("scala/runtime/LazyVals$LazyValControlState", "scala/runtime/LazyVals", "LazyValControlState",
+        ACC_PUBLIC | ACC_STATIC),
+      ("scala/runtime/LazyVals$NullValue$", "scala/runtime/LazyVals", "NullValue$",
+        ACC_PUBLIC | ACC_FINAL | ACC_STATIC),
+      ("scala/runtime/LazyVals$Waiting", "scala/runtime/LazyVals", "Waiting",
+        ACC_PUBLIC | ACC_FINAL | ACC_STATIC)
+    )
+
+    innerClassesToAdd.foreach { case (name, outerName, innerName, access) =>
+      val exists = classNode.innerClasses.asScala.exists(_.name == name)
+      if (!exists) {
+        classNode.innerClasses.add(new InnerClassNode(name, outerName, innerName, access))
+      }
+    }
+  }
+
+  /** Type information for boxing/unboxing in 3.8+ lazy val patterns. */
+  private case class TypeInfo(
+      instanceOfType: String,
+      isPrimitive: Boolean,
+      returnOpcode: Int,
+      addUnboxOrCast: InsnList => Unit,
+      addBox: InsnList => Unit
+  )
+
+  /** Gets type information for boxing/unboxing based on original field descriptor. */
+  private def getTypeInfo(descriptor: String): TypeInfo = descriptor match {
+    case "I" => TypeInfo("java/lang/Integer", true, IRETURN,
+      insns => insns.add(new MethodInsnNode(INVOKESTATIC, "scala/runtime/BoxesRunTime",
+        "unboxToInt", "(Ljava/lang/Object;)I", false)),
+      insns => insns.add(new MethodInsnNode(INVOKESTATIC, "scala/runtime/BoxesRunTime",
+        "boxToInteger", "(I)Ljava/lang/Integer;", false)))
+    case "J" => TypeInfo("java/lang/Long", true, LRETURN,
+      insns => insns.add(new MethodInsnNode(INVOKESTATIC, "scala/runtime/BoxesRunTime",
+        "unboxToLong", "(Ljava/lang/Object;)J", false)),
+      insns => insns.add(new MethodInsnNode(INVOKESTATIC, "scala/runtime/BoxesRunTime",
+        "boxToLong", "(J)Ljava/lang/Long;", false)))
+    case "D" => TypeInfo("java/lang/Double", true, DRETURN,
+      insns => insns.add(new MethodInsnNode(INVOKESTATIC, "scala/runtime/BoxesRunTime",
+        "unboxToDouble", "(Ljava/lang/Object;)D", false)),
+      insns => insns.add(new MethodInsnNode(INVOKESTATIC, "scala/runtime/BoxesRunTime",
+        "boxToDouble", "(D)Ljava/lang/Double;", false)))
+    case "Z" => TypeInfo("java/lang/Boolean", true, IRETURN,
+      insns => insns.add(new MethodInsnNode(INVOKESTATIC, "scala/runtime/BoxesRunTime",
+        "unboxToBoolean", "(Ljava/lang/Object;)Z", false)),
+      insns => insns.add(new MethodInsnNode(INVOKESTATIC, "scala/runtime/BoxesRunTime",
+        "boxToBoolean", "(Z)Ljava/lang/Boolean;", false)))
+    case "F" => TypeInfo("java/lang/Float", true, FRETURN,
+      insns => insns.add(new MethodInsnNode(INVOKESTATIC, "scala/runtime/BoxesRunTime",
+        "unboxToFloat", "(Ljava/lang/Object;)F", false)),
+      insns => insns.add(new MethodInsnNode(INVOKESTATIC, "scala/runtime/BoxesRunTime",
+        "boxToFloat", "(F)Ljava/lang/Float;", false)))
+    case desc if desc.startsWith("L") && desc.endsWith(";") =>
+      val internalName = desc.substring(1, desc.length - 1)
+      TypeInfo(internalName, false, ARETURN,
+        insns => insns.add(new TypeInsnNode(CHECKCAST, internalName)),
+        insns => () /* no boxing needed for reference types */)
+    case desc =>
+      // Fallback for Object or unknown — treat as reference type
+      TypeInfo("java/lang/Object", false, ARETURN,
+        insns => (), /* no cast needed for Object */
+        insns => () /* no boxing needed */)
   }
 
   // ============================================================================
