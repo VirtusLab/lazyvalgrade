@@ -11,9 +11,12 @@ import lazyvalgrade.analysis.ClassfileGroup
 /** Patches Scala 3.x lazy val bytecode to Scala 3.8+ format.
   *
   * Supports multiple lazy val implementation variants:
-  *   - Scala 3.0-3.1: Field-based with bitmap (not yet implemented)
-  *   - Scala 3.2: VarHandle-based with different initialization pattern (not yet implemented)
+  *   - Scala 3.0-3.2: Field-based with bitmap → VarHandle transformation (implemented)
   *   - Scala 3.3-3.7: Unsafe-based → VarHandle transformation (implemented)
+  *
+  * The 3.0-3.2 transformation:
+  *   - Replaces bitmap-based inline lazy val initialization with VarHandle-based lzyINIT methods
+  *   - 3.2 uses getDeclaredField+getOffsetStatic vs 3.0-3.1's getOffset, but the same patching logic handles both
   *
   * The 3.3-3.7 transformation:
   *   - Field level: OFFSET$_m_N (long) → <name>$lzyN$lzyHandle (VarHandle)
@@ -133,10 +136,31 @@ object BytecodePatcher {
           }
 
         case ScalaVersion.Scala32x =>
-          // Not implemented yet for 3.2
-          if (objectLazyVals.nonEmpty) patchScala32x(companionObjectBytes, companionObjectInfo, objectLazyVals, companionObjectName)
-          else if (classLazyVals.nonEmpty) patchScala32x(classBytes, classInfo, classLazyVals, className)
-          else PatchResult.NotApplicable
+          // Handle different companion pair scenarios for 3.2 (same logic as 3.0-3.1)
+          (objectLazyVals.nonEmpty, classLazyVals.nonEmpty) match {
+            case (true, false) =>
+              // Only object has lazy vals - companion class has OFFSET field
+              patchScala30x_31x(
+                companionObjectBytes,
+                companionObjectInfo,
+                objectLazyVals,
+                companionObjectName,
+                Some((className, classInfo, classBytes))
+              )
+            case (false, true) =>
+              // Only class has lazy vals - patch as standalone
+              patchScala30x_31x(classBytes, classInfo, classLazyVals, className)
+            case (true, true) =>
+              // BOTH have lazy vals - need to patch both independently
+              patchCompanionPairBothHaveLazyVals30x_31x(
+                companionObjectName, className,
+                companionObjectInfo, classInfo,
+                companionObjectBytes, classBytes,
+                objectLazyVals, classLazyVals
+              )
+            case (false, false) =>
+              PatchResult.NotApplicable
+          }
 
         case ScalaVersion.Scala33x_37x =>
           // Handle different companion pair scenarios
@@ -966,9 +990,9 @@ object BytecodePatcher {
 
   /** Patches Scala 3.2 lazy vals to 3.8+ format.
     *
-    * NOT YET IMPLEMENTED.
-    *
-    * Scala 3.2 uses VarHandle but with a different initialization pattern than 3.8+.
+    * Scala 3.2 bytecode is nearly identical to 3.0-3.1 — the only difference is in clinit
+    * (getDeclaredField+getOffsetStatic vs getOffset), which the backward-walking removal
+    * code handles transparently. Delegates to the 3.0-3.1 patching logic.
     */
   private def patchScala32x(
       bytes: Array[Byte],
@@ -976,7 +1000,7 @@ object BytecodePatcher {
       lazyVals: Seq[LazyValInfo],
       name: String
   ): PatchResult = {
-    PatchResult.Failed("Scala 3.2 lazy val patching is not yet implemented")
+    patchScala30x_31x(bytes, classInfo, lazyVals, name)
   }
 
   // ============================================================================

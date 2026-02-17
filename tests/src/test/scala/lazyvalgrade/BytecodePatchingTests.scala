@@ -35,6 +35,7 @@ class BytecodePatchingTests extends FunSuite with ExampleLoader {
   val testVersions: Seq[String] = Seq(
     "3.0.2",
     "3.1.3",
+    "3.2.2",
     "3.3.0",
     "3.3.6",
     "3.4.3",
@@ -50,6 +51,7 @@ class BytecodePatchingTests extends FunSuite with ExampleLoader {
   val patchableVersions: Set[String] = Set(
     "3.0.2",
     "3.1.3",
+    "3.2.2",
     "3.3.0",
     "3.3.6",
     "3.4.3",
@@ -59,7 +61,7 @@ class BytecodePatchingTests extends FunSuite with ExampleLoader {
   )
 
   /** Versions that generate full 3.8+ code and need 3.8+ runtime classes (NullValue$, Evaluating$, etc.) */
-  val needsTargetRuntime: Set[String] = Set("3.0.2", "3.1.3")
+  val needsTargetRuntime: Set[String] = Set("3.0.2", "3.1.3", "3.2.2")
 
   /** Target version (3.8) */
   val targetVersion: String = "3.8.1"
@@ -487,7 +489,7 @@ class BytecodePatchingTests extends FunSuite with ExampleLoader {
 
   /** Test: Non-patchable versions return NotApplicable */
   test("Non-patchable versions return NotApplicable") {
-    val nonPatchableVersions = Set("3.2.2", targetVersion)
+    val nonPatchableVersions = Set(targetVersion)
 
     examples.foreach { example =>
       if (example.metadata.expectedClasses.exists(_.lazyVals.nonEmpty)) {

@@ -168,11 +168,12 @@ object CompileExamplesMain {
           if (!quiet) info("\n=== Generating javap outputs for patched classfiles ===")
           results.foreach {
             case Right(result) =>
-              // Only process patchable versions (3.3-3.7)
+              // Only process patchable versions (3.0-3.7)
               val patchableVersions = testVersions.filter { version =>
-                version.startsWith("3.3") || version.startsWith("3.4") ||
-                version.startsWith("3.5") || version.startsWith("3.6") ||
-                version.startsWith("3.7")
+                version.startsWith("3.0") || version.startsWith("3.1") ||
+                version.startsWith("3.2") || version.startsWith("3.3") ||
+                version.startsWith("3.4") || version.startsWith("3.5") ||
+                version.startsWith("3.6") || version.startsWith("3.7")
               }
 
               patchableVersions.foreach { version =>
