@@ -48,9 +48,9 @@ LazyValgrade provides bytecode-level transformations using ASM to rewrite lazy v
 
 ### Use Cases
 
-1. **Java Agent for Testing**: A preinit class loading mutator that hotfixes classes on-the-fly, enabling test suites to run on JDK 26+ with dependencies compiled with older Scala versions.
+1. **Batch Build Tool** (available now): A standalone CLI tool for build systems to mutate complete application classpaths under closed-world assumption when building application assemblies, producing JDK 26+ compatible artifacts.
 
-2. **Batch Build Tool**: A standalone tool for build systems to mutate complete application classpaths under closed-world assumption when building application assemblies, producing JDK 26+ compatible artifacts.
+2. **Java Agent for Testing** (planned): A preinit class loading mutator that hotfixes classes on-the-fly, enabling test suites to run on JDK 26+ with dependencies compiled with older Scala versions.
 
 ### Why This Works
 
@@ -61,12 +61,28 @@ LazyValgrade provides bytecode-level transformations using ASM to rewrite lazy v
 
 ## Project Structure
 
-- `core/` - Core bytecode transformation logic using ASM
-- `experimental/` - Experimental features and research
+- `core/` - Core bytecode analysis, detection, and transformation logic using ASM
+- `cli/` - Command-line interface for batch patching of classfiles
+- `tests/` - Test suite with fixtures covering all Scala 3.x lazy val variants
+- `testops/` - Development tooling for compiling examples across Scala versions and inspecting bytecode
 
 ## Status
 
-This is a proof-of-concept project under active development.
+Alpha-quality software under active development. Core detection and patching works across all Scala 3.0-3.7.x lazy val implementation families. See [TODO.md](TODO.md) for planned work.
+
+## Usage
+
+### CLI (Batch Patching)
+
+```bash
+# Build the CLI
+sbt cli/assembly
+
+# Patch all classfiles in a directory (in-place)
+java -jar cli/target/scala-3.7.3/lazyvalgrade.jar <directory>
+```
+
+The CLI recursively finds all `.class` files in the given directory, detects Scala 3.0-3.7.x lazy val implementations, and rewrites them to the 3.8+ VarHandle-based format.
 
 ## Goal
 

@@ -72,6 +72,34 @@ lazy val cli = project
   )
   .dependsOn(core)
 
+lazy val agent = project
+  .in(file("agent"))
+  .settings(
+    name := "lazyvalgrade-agent",
+    version := "0.1.0-SNAPSHOT",
+    scalaVersion := "3.7.3",
+    assembly / assemblyJarName := "lazyvalgrade-agent.jar",
+    assembly / assemblyMergeStrategy := {
+      case PathList("META-INF", "MANIFEST.MF") => MergeStrategy.discard
+      case PathList("META-INF", xs @ _*) => MergeStrategy.discard
+      case x => MergeStrategy.first
+    },
+    assembly / assemblyShadeRules := Seq(
+      ShadeRule.rename("scala.**" -> "lazyvalgrade.shaded.scala.@1").inAll,
+      ShadeRule.rename("org.objectweb.asm.**" -> "lazyvalgrade.shaded.asm.@1").inAll,
+      ShadeRule.rename("scribe.**" -> "lazyvalgrade.shaded.scribe.@1").inAll,
+      ShadeRule.rename("perfolation.**" -> "lazyvalgrade.shaded.perfolation.@1").inAll,
+      ShadeRule.rename("moduload.**" -> "lazyvalgrade.shaded.moduload.@1").inAll,
+      ShadeRule.rename("com.lihaoyi.**" -> "lazyvalgrade.shaded.lihaoyi.@1").inAll
+    ),
+    assembly / packageOptions += Package.ManifestAttributes(
+      "Premain-Class" -> "lazyvalgrade.agent.LazyValGradeAgent",
+      "Can-Retransform-Classes" -> "false",
+      "Can-Redefine-Classes" -> "false"
+    )
+  )
+  .dependsOn(core)
+
 lazy val root = project
   .in(file("."))
   .settings(
@@ -80,4 +108,4 @@ lazy val root = project
     addCommandAlias("compileExamples", "testops/runMain lazyvalgrade.CompileExamplesMain"),
     addCommandAlias("compileExamplesWithPatching", "testops/runMain lazyvalgrade.CompileExamplesMain --patch")
   )
-  .aggregate(core, testops, tests, cli)
+  .aggregate(core, testops, tests, cli, agent)

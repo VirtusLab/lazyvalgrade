@@ -32,7 +32,7 @@
 
   HIGH RISK - Likely to break:
 
-  1. Many Lazy Vals (33+ forcing second bitmap word)
+  1. ✅ Many Lazy Vals (33+ forcing second bitmap word)
 
   In 3.3-3.7, the bitmap is a Long (64 bits), 2 bits per lazy val state = 32 lazy vals per word.
   The 33rd lazy val needs a second bitmap field. The OFFSET$_m_N indexing (currently sequential
@@ -49,7 +49,7 @@
   @main def main() =
     println(s"v35 = ${ManyLazy.v35}")  // Forces all 35 lazy vals via chain
 
-  2. Multiple Trait Mixin (each trait contributes lazy vals)
+  2. ✅ Multiple Trait Mixin (each trait contributes lazy vals)
 
   When a class mixes in multiple traits that each define lazy vals, the field layout in the
   implementing class contains lazy vals from all traits. The OFFSET indices are assigned
@@ -73,7 +73,7 @@
     val p = new Person()
     println(s"${p.name}, ${p.age}, ${p.email}")
 
-  3. Diamond Inheritance with Lazy Vals
+  3. ✅ Diamond Inheritance with Lazy Vals
 
   Diamond pattern where a lazy val is defined in a shared ancestor and potentially
   overridden or inherited through two paths. The linearization and mixin forwarder
@@ -97,7 +97,7 @@
 
   MEDIUM RISK - Might break:
 
-  4. Lazy Val Returning Unit
+  4. ✅ Lazy Val Returning Unit
 
   Unit erases to void but lazy val storage is Object-typed. The compiler boxes Unit as
   BoxedUnit in the storage field. The VarHandle compareAndSet might behave differently
@@ -114,7 +114,7 @@
     LazyUnit.doStuff
     println(s"sideEffect = ${LazyUnit.sideEffect}")
 
-  5. Local Class with Lazy Val (class defined inside a method)
+  5. ✅ Local Class with Lazy Val (class defined inside a method)
 
   A class defined inside a method gets an unusual class name (e.g., main$Foo$1) and
   captures the enclosing method's scope. The compiler might handle OFFSET field
@@ -127,7 +127,7 @@
     val l = new Local()
     println(s"value = ${l.value}")
 
-  6. Lazy Val with Opaque Type
+  6. ✅ Lazy Val with Opaque Type
 
   Opaque types change erasure behavior. The storage field descriptor might not be
   Ljava/lang/Object; if the opaque type erases to a primitive or specific class,
@@ -144,7 +144,7 @@
   @main def main() =
     println(s"name = ${Types.defaultName}")
 
-  7. Lazy Val in Class Extending Java Class
+  7. ✅ Lazy Val in Class Extending Java Class
 
   If a Scala class extends a Java class (e.g., java.util.ArrayList), the field layout
   includes Java fields first. This might shift OFFSET calculations or interfere with
@@ -159,7 +159,7 @@
     l.add("hello")
     println(s"cachedSize = ${l.cachedSize}")
 
-  8. Concurrent Access (thread-safety stress test)
+  8. ✅ Concurrent Access (thread-safety stress test)
 
   The actual thread-safety semantics of VarHandle.compareAndSet vs Unsafe.objCAS.
   If the patching subtly changes the memory ordering or CAS semantics, concurrent
@@ -184,7 +184,7 @@
 
   LOW RISK - Probably fine but worth checking:
 
-  9. Lazy Val with @transient Annotation
+  9. ✅ Lazy Val with @transient Annotation
 
   @transient affects serialization and might change field flags in bytecode,
   potentially confusing the volatile flag check in detection.
@@ -194,7 +194,7 @@
     @transient lazy val cached: String = "not-serialized"
     lazy val persistent: String = "serialized"
 
-  10. Inline/Transparent Method Producing Lazy Val
+  10. ✅ Inline/Transparent Method Producing Lazy Val
 
   Scala 3 inline might affect how the initializer is compiled, potentially
   inlining the initialization code differently and breaking the lzyINIT
