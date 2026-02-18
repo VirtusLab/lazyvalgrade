@@ -1,0 +1,13 @@
+{
+  "description": "Lazy val in class extending a Java class (field layout with Java parent)",
+  "mainClassName": "main",
+  "expectedClasses": [
+    {
+      "className": "ScalaList",
+      "lazyVals": [
+        { "name": "cachedSize", "index": 1 }
+      ]
+    }
+  ],
+  "expectedOutput": "cachedSize = 1"
+}

@@ -79,7 +79,7 @@ Alpha-quality software under active development. Core detection and patching wor
 sbt cli/assembly
 
 # Patch all classfiles in a directory (in-place)
-java -jar cli/target/scala-3.7.3/lazyvalgrade.jar <directory>
+java -jar cli/target/scala-3.8.1/lazyvalgrade.jar <directory>
 ```
 
 The CLI recursively finds all `.class` files in the given directory, detects Scala 3.0-3.7.x lazy val implementations, and rewrites them to the 3.8+ VarHandle-based format.

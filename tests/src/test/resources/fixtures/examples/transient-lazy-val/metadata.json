@@ -1,0 +1,14 @@
+{
+  "description": "Lazy val with @transient annotation (field flags handling)",
+  "mainClassName": "main",
+  "expectedClasses": [
+    {
+      "className": "Serializable",
+      "lazyVals": [
+        { "name": "cached", "index": 1 },
+        { "name": "persistent", "index": 1 }
+      ]
+    }
+  ],
+  "expectedOutput": "not-serialized, serialized"
+}

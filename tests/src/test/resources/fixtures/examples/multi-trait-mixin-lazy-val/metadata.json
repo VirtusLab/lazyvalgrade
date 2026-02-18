@@ -1,0 +1,15 @@
+{
+  "description": "Multiple traits each contributing lazy vals, all mixed into a single class",
+  "mainClassName": "main",
+  "expectedClasses": [
+    {
+      "className": "Person",
+      "lazyVals": [
+        { "name": "name", "index": 1 },
+        { "name": "age", "index": 1 },
+        { "name": "email", "index": 1 }
+      ]
+    }
+  ],
+  "expectedOutput": "default-name, 0, none"
+}

@@ -30,8 +30,8 @@ SELECT_EXAMPLE=simple-lazy-val,class-lazy-val sbt compileExamplesWithPatching
 
 # Or run the assembly directly
 sbt testops/assembly
-java -jar testops/target/scala-3.7.3/lazyvalgrade-testops.jar
-java -jar testops/target/scala-3.7.3/lazyvalgrade-testops.jar --patch
+java -jar testops/target/scala-3.8.1/lazyvalgrade-testops.jar
+java -jar testops/target/scala-3.8.1/lazyvalgrade-testops.jar --patch
 ```
 
 **What it does:**
@@ -185,11 +185,11 @@ sbt compile
 
 # Build CLI assembly
 sbt cli/assembly
-# Output: cli/target/scala-3.7.3/lazyvalgrade.jar
+# Output: cli/target/scala-3.8.1/lazyvalgrade.jar
 
 # Build testops assembly
 sbt testops/assembly
-# Output: testops/target/scala-3.7.3/lazyvalgrade-testops.jar
+# Output: testops/target/scala-3.8.1/lazyvalgrade-testops.jar
 ```
 
 ## Important Notes

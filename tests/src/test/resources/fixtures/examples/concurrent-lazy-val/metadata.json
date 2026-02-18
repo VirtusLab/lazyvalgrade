@@ -1,0 +1,13 @@
+{
+  "description": "Concurrent access to lazy val (thread-safety stress test)",
+  "mainClassName": "main",
+  "expectedClasses": [
+    {
+      "className": "Concurrent$",
+      "lazyVals": [
+        { "name": "value", "index": 1 }
+      ]
+    }
+  ],
+  "expectedOutput": "value = 42\ninitCount = 1"
+}

@@ -3,7 +3,7 @@ lazy val core = project
   .settings(
     name := "lazyvalgrade-core",
     version := "0.1.0-SNAPSHOT",
-    scalaVersion := "3.7.3",
+    scalaVersion := "3.8.1",
     libraryDependencies ++= Seq(
       "org.ow2.asm" % "asm" % "9.7",
       "org.ow2.asm" % "asm-commons" % "9.7",
@@ -19,7 +19,7 @@ lazy val testops = project
   .settings(
     name := "lazyvalgrade-testops",
     version := "0.1.0-SNAPSHOT",
-    scalaVersion := "3.7.3",
+    scalaVersion := "3.8.1",
     libraryDependencies ++= Seq(
       "com.outr" %% "scribe" % "3.15.0",
       "com.lihaoyi" %% "os-lib" % "0.11.3",
@@ -41,22 +41,24 @@ lazy val tests = project
   .settings(
     name := "lazyvalgrade-tests",
     version := "0.1.0-SNAPSHOT",
-    scalaVersion := "3.7.3",
+    scalaVersion := "3.8.1",
     libraryDependencies ++= Seq(
       "org.scalameta" %% "munit" % "1.0.0" % Test,
       "com.outr" %% "scribe" % "3.15.0",
       "com.lihaoyi" %% "os-lib" % "0.11.3"
     ),
-    testFrameworks += new TestFramework("munit.Framework")
+    testFrameworks += new TestFramework("munit.Framework"),
+    Test / test := ((Test / test) dependsOn (agent / assembly)).value,
+    Test / testOnly := ((Test / testOnly) dependsOn (agent / assembly)).evaluated
   )
-  .dependsOn(core, testops)
+  .dependsOn(core, testops, agent)
 
 lazy val cli = project
   .in(file("cli"))
   .settings(
     name := "lazyvalgrade-cli",
     version := "0.1.0-SNAPSHOT",
-    scalaVersion := "3.7.3",
+    scalaVersion := "3.8.1",
     libraryDependencies ++= Seq(
       "com.lihaoyi" %% "os-lib" % "0.11.3",
       "com.lihaoyi" %% "fansi" % "0.5.0",
@@ -77,7 +79,10 @@ lazy val agent = project
   .settings(
     name := "lazyvalgrade-agent",
     version := "0.1.0-SNAPSHOT",
-    scalaVersion := "3.7.3",
+    scalaVersion := "3.8.1",
+    libraryDependencies ++= Seq(
+      "com.outr" %% "scribe-file" % "3.15.0"
+    ),
     assembly / assemblyJarName := "lazyvalgrade-agent.jar",
     assembly / assemblyMergeStrategy := {
       case PathList("META-INF", "MANIFEST.MF") => MergeStrategy.discard
@@ -104,7 +109,7 @@ lazy val root = project
   .in(file("."))
   .settings(
     name := "lazyvalgrade",
-    scalaVersion := "3.7.3",
+    scalaVersion := "3.8.1",
     addCommandAlias("compileExamples", "testops/runMain lazyvalgrade.CompileExamplesMain"),
     addCommandAlias("compileExamplesWithPatching", "testops/runMain lazyvalgrade.CompileExamplesMain --patch")
   )

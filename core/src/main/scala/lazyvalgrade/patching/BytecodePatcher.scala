@@ -47,6 +47,27 @@ object BytecodePatcher {
     final case class Failed(error: String) extends PatchResult
   }
 
+  // String constants for scala.runtime.LazyVals types.
+  // These must NOT appear as literal "scala/runtime/..." in the constant pool,
+  // otherwise sbt-assembly shade rules (which rewrite "scala.**" class references)
+  // will mangle them. These strings are used to match/generate bytecode for the
+  // *application's* classes, not the agent's own shaded dependencies.
+  //
+  // We use Array(...).mkString to force runtime construction — simple string
+  // concatenation gets constant-folded by the Scala compiler.
+  private val ScalaRuntimePrefix: String = Array("sca", "la/run", "time/").mkString
+  val LazyValsObj: String = ScalaRuntimePrefix + "LazyVals$"
+  val LazyVals: String = ScalaRuntimePrefix + "LazyVals"
+  val NullValue: String = ScalaRuntimePrefix + "LazyVals$NullValue$"
+  val Evaluating: String = ScalaRuntimePrefix + "LazyVals$Evaluating$"
+  val Waiting: String = ScalaRuntimePrefix + "LazyVals$Waiting"
+  val ControlState: String = ScalaRuntimePrefix + "LazyVals$LazyValControlState"
+
+  // Descriptors referencing LazyVals types (also need shade protection)
+  val NullValueDesc: String = "L" + NullValue + ";"
+  val EvaluatingDesc: String = "L" + Evaluating + ";"
+  val LazyValsObjDesc: String = "L" + LazyValsObj + ";"
+
   /** Patches a classfile group to 3.8+ format, handling both single files and companion pairs.
     *
     * @param group
@@ -342,7 +363,7 @@ object BytecodePatcher {
             while (prev != null && removeCount < 10) {
               prev match {
                 case gs: FieldInsnNode if gs.getOpcode == GETSTATIC &&
-                    gs.owner == "scala/runtime/LazyVals$" && gs.name == "MODULE$" =>
+                    gs.owner == LazyValsObj && gs.name == "MODULE$" =>
                   var temp = prev
                   while (temp != null && temp != current.getNext) {
                     toRemove += temp
@@ -470,7 +491,7 @@ object BytecodePatcher {
     var casNode: MethodInsnNode = null
     while (current != null && casNode == null) {
       current match {
-        case m: MethodInsnNode if m.owner == "scala/runtime/LazyVals$" && m.name == "CAS" =>
+        case m: MethodInsnNode if m.owner == LazyValsObj && m.name == "CAS" =>
           casNode = m
         case _ =>
       }
@@ -493,7 +514,7 @@ object BytecodePatcher {
         var checked = 0
         while (n != null && checked < 10 && !isSetFlagHandler) {
           n match {
-            case m: MethodInsnNode if m.owner == "scala/runtime/LazyVals$" && m.name == "setFlag" =>
+            case m: MethodInsnNode if m.owner == LazyValsObj && m.name == "setFlag" =>
               isSetFlagHandler = true
             case _ =>
           }
@@ -582,8 +603,8 @@ object BytecodePatcher {
     // ALOAD 1
     insns.add(new VarInsnNode(ALOAD, 1))
     // GETSTATIC LazyVals$NullValue$.MODULE$
-    insns.add(new FieldInsnNode(GETSTATIC, "scala/runtime/LazyVals$NullValue$", "MODULE$",
-      "Lscala/runtime/LazyVals$NullValue$;"))
+    insns.add(new FieldInsnNode(GETSTATIC, NullValue, "MODULE$",
+      NullValueDesc))
     // IF_ACMPNE lInit
     insns.add(new JumpInsnNode(IF_ACMPNE, lInit))
 
@@ -658,8 +679,8 @@ object BytecodePatcher {
     insns.add(new FieldInsnNode(GETSTATIC, classInternalName, varHandleName, "Ljava/lang/invoke/VarHandle;"))
     insns.add(new VarInsnNode(ALOAD, 0))
     insns.add(new InsnNode(ACONST_NULL))
-    insns.add(new FieldInsnNode(GETSTATIC, "scala/runtime/LazyVals$Evaluating$", "MODULE$",
-      "Lscala/runtime/LazyVals$Evaluating$;"))
+    insns.add(new FieldInsnNode(GETSTATIC, Evaluating, "MODULE$",
+      EvaluatingDesc))
     insns.add(new MethodInsnNode(INVOKEVIRTUAL, "java/lang/invoke/VarHandle", "compareAndSet",
       "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z", false))
     insns.add(new JumpInsnNode(IFEQ, lCasFailed))
@@ -687,8 +708,8 @@ object BytecodePatcher {
     // null → NullValue$ mapping: ALOAD 3; IFNONNULL lNullMapping
     insns.add(new VarInsnNode(ALOAD, 3))
     insns.add(new JumpInsnNode(IFNONNULL, lNullMapping))
-    insns.add(new FieldInsnNode(GETSTATIC, "scala/runtime/LazyVals$NullValue$", "MODULE$",
-      "Lscala/runtime/LazyVals$NullValue$;"))
+    insns.add(new FieldInsnNode(GETSTATIC, NullValue, "MODULE$",
+      NullValueDesc))
     insns.add(new VarInsnNode(ASTORE, 2))
     insns.add(new JumpInsnNode(GOTO, lAfterCompute))
 
@@ -708,8 +729,8 @@ object BytecodePatcher {
     // CAS Evaluating$ → result (in exception handler, result is still in slot 2)
     insns.add(new FieldInsnNode(GETSTATIC, classInternalName, varHandleName, "Ljava/lang/invoke/VarHandle;"))
     insns.add(new VarInsnNode(ALOAD, 0))
-    insns.add(new FieldInsnNode(GETSTATIC, "scala/runtime/LazyVals$Evaluating$", "MODULE$",
-      "Lscala/runtime/LazyVals$Evaluating$;"))
+    insns.add(new FieldInsnNode(GETSTATIC, Evaluating, "MODULE$",
+      EvaluatingDesc))
     insns.add(new VarInsnNode(ALOAD, 2))
     insns.add(new MethodInsnNode(INVOKEVIRTUAL, "java/lang/invoke/VarHandle", "compareAndSet",
       "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z", false))
@@ -718,7 +739,7 @@ object BytecodePatcher {
     // Exception handler: CAS failed, need to countDown Waiting
     insns.add(new VarInsnNode(ALOAD, 0))
     insns.add(new FieldInsnNode(GETFIELD, classInternalName, storageFieldName, "Ljava/lang/Object;"))
-    insns.add(new TypeInsnNode(CHECKCAST, "scala/runtime/LazyVals$Waiting"))
+    insns.add(new TypeInsnNode(CHECKCAST, Waiting))
     insns.add(new VarInsnNode(ASTORE, 5))
     insns.add(new FieldInsnNode(GETSTATIC, classInternalName, varHandleName, "Ljava/lang/invoke/VarHandle;"))
     insns.add(new VarInsnNode(ALOAD, 0))
@@ -728,7 +749,7 @@ object BytecodePatcher {
       "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z", false))
     insns.add(new InsnNode(POP))
     insns.add(new VarInsnNode(ALOAD, 5))
-    insns.add(new MethodInsnNode(INVOKEVIRTUAL, "scala/runtime/LazyVals$Waiting", "countDown", "()V", false))
+    insns.add(new MethodInsnNode(INVOKEVIRTUAL, Waiting, "countDown", "()V", false))
 
     // lExCasOk: rethrow exception
     insns.add(lExCasOk)
@@ -741,8 +762,8 @@ object BytecodePatcher {
     insns.add(lSuccessCasOk)
     insns.add(new FieldInsnNode(GETSTATIC, classInternalName, varHandleName, "Ljava/lang/invoke/VarHandle;"))
     insns.add(new VarInsnNode(ALOAD, 0))
-    insns.add(new FieldInsnNode(GETSTATIC, "scala/runtime/LazyVals$Evaluating$", "MODULE$",
-      "Lscala/runtime/LazyVals$Evaluating$;"))
+    insns.add(new FieldInsnNode(GETSTATIC, Evaluating, "MODULE$",
+      EvaluatingDesc))
     insns.add(new VarInsnNode(ALOAD, 2))
     insns.add(new MethodInsnNode(INVOKEVIRTUAL, "java/lang/invoke/VarHandle", "compareAndSet",
       "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z", false))
@@ -751,7 +772,7 @@ object BytecodePatcher {
     // Success CAS failed: countDown Waiting and return
     insns.add(new VarInsnNode(ALOAD, 0))
     insns.add(new FieldInsnNode(GETFIELD, classInternalName, storageFieldName, "Ljava/lang/Object;"))
-    insns.add(new TypeInsnNode(CHECKCAST, "scala/runtime/LazyVals$Waiting"))
+    insns.add(new TypeInsnNode(CHECKCAST, Waiting))
     insns.add(new VarInsnNode(ASTORE, 5))
     insns.add(new FieldInsnNode(GETSTATIC, classInternalName, varHandleName, "Ljava/lang/invoke/VarHandle;"))
     insns.add(new VarInsnNode(ALOAD, 0))
@@ -761,7 +782,7 @@ object BytecodePatcher {
       "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z", false))
     insns.add(new InsnNode(POP))
     insns.add(new VarInsnNode(ALOAD, 5))
-    insns.add(new MethodInsnNode(INVOKEVIRTUAL, "scala/runtime/LazyVals$Waiting", "countDown", "()V", false))
+    insns.add(new MethodInsnNode(INVOKEVIRTUAL, Waiting, "countDown", "()V", false))
 
     // lReturnResult: return slot 3
     insns.add(lReturnResult)
@@ -775,22 +796,22 @@ object BytecodePatcher {
     // lNonNull: check if LazyValControlState
     insns.add(lNonNull)
     insns.add(new VarInsnNode(ALOAD, 1))
-    insns.add(new TypeInsnNode(INSTANCEOF, "scala/runtime/LazyVals$LazyValControlState"))
+    insns.add(new TypeInsnNode(INSTANCEOF, ControlState))
     insns.add(new JumpInsnNode(IFEQ, lReturnVal))
 
     // Check Evaluating$
     insns.add(new VarInsnNode(ALOAD, 1))
-    insns.add(new FieldInsnNode(GETSTATIC, "scala/runtime/LazyVals$Evaluating$", "MODULE$",
-      "Lscala/runtime/LazyVals$Evaluating$;"))
+    insns.add(new FieldInsnNode(GETSTATIC, Evaluating, "MODULE$",
+      EvaluatingDesc))
     insns.add(new JumpInsnNode(IF_ACMPNE, lCheckWaiting))
 
     // Is Evaluating$: CAS Evaluating$ → new Waiting, loop back
     insns.add(new FieldInsnNode(GETSTATIC, classInternalName, varHandleName, "Ljava/lang/invoke/VarHandle;"))
     insns.add(new VarInsnNode(ALOAD, 0))
     insns.add(new VarInsnNode(ALOAD, 1))
-    insns.add(new TypeInsnNode(NEW, "scala/runtime/LazyVals$Waiting"))
+    insns.add(new TypeInsnNode(NEW, Waiting))
     insns.add(new InsnNode(DUP))
-    insns.add(new MethodInsnNode(INVOKESPECIAL, "scala/runtime/LazyVals$Waiting", "<init>", "()V", false))
+    insns.add(new MethodInsnNode(INVOKESPECIAL, Waiting, "<init>", "()V", false))
     insns.add(new MethodInsnNode(INVOKEVIRTUAL, "java/lang/invoke/VarHandle", "compareAndSet",
       "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z", false))
     insns.add(new InsnNode(POP))
@@ -799,13 +820,13 @@ object BytecodePatcher {
     // lCheckWaiting: check Waiting
     insns.add(lCheckWaiting)
     insns.add(new VarInsnNode(ALOAD, 1))
-    insns.add(new TypeInsnNode(INSTANCEOF, "scala/runtime/LazyVals$Waiting"))
+    insns.add(new TypeInsnNode(INSTANCEOF, Waiting))
     insns.add(new JumpInsnNode(IFEQ, lReturnNull))
 
     // Is Waiting: await and loop back
     insns.add(new VarInsnNode(ALOAD, 1))
-    insns.add(new TypeInsnNode(CHECKCAST, "scala/runtime/LazyVals$Waiting"))
-    insns.add(new MethodInsnNode(INVOKEVIRTUAL, "scala/runtime/LazyVals$Waiting", "await", "()V", false))
+    insns.add(new TypeInsnNode(CHECKCAST, Waiting))
+    insns.add(new MethodInsnNode(INVOKEVIRTUAL, Waiting, "await", "()V", false))
     insns.add(new JumpInsnNode(GOTO, lStart))
 
     // lReturnNull: unknown control state, return null
@@ -853,7 +874,7 @@ object BytecodePatcher {
           while (prev != null && count < 10) {
             prev match {
               case gs: FieldInsnNode if gs.getOpcode == GETSTATIC &&
-                  gs.owner == "scala/runtime/LazyVals$" && gs.name == "MODULE$" =>
+                  gs.owner == LazyValsObj && gs.name == "MODULE$" =>
                 // Found start, collect everything from here to putStatic
                 var temp = prev
                 while (temp != null && temp != current.getNext) {
@@ -918,13 +939,13 @@ object BytecodePatcher {
     val innerClassesToAdd = Seq(
       ("java/lang/invoke/MethodHandles$Lookup", "java/lang/invoke/MethodHandles", "Lookup",
         ACC_PUBLIC | ACC_FINAL | ACC_STATIC),
-      ("scala/runtime/LazyVals$Evaluating$", "scala/runtime/LazyVals", "Evaluating$",
+      (Evaluating, LazyVals, "Evaluating$",
         ACC_PUBLIC | ACC_FINAL | ACC_STATIC),
-      ("scala/runtime/LazyVals$LazyValControlState", "scala/runtime/LazyVals", "LazyValControlState",
+      (ControlState, LazyVals, "LazyValControlState",
         ACC_PUBLIC | ACC_STATIC),
-      ("scala/runtime/LazyVals$NullValue$", "scala/runtime/LazyVals", "NullValue$",
+      (NullValue, LazyVals, "NullValue$",
         ACC_PUBLIC | ACC_FINAL | ACC_STATIC),
-      ("scala/runtime/LazyVals$Waiting", "scala/runtime/LazyVals", "Waiting",
+      (Waiting, LazyVals, "Waiting",
         ACC_PUBLIC | ACC_FINAL | ACC_STATIC)
     )
 
@@ -1453,7 +1474,7 @@ object BytecodePatcher {
       current match {
         case getStatic: FieldInsnNode
             if getStatic.getOpcode == GETSTATIC &&
-              getStatic.owner == "scala/runtime/LazyVals$" &&
+              getStatic.owner == LazyValsObj &&
               getStatic.name == "MODULE$" =>
           // Found start of pattern
           var next1 = getStatic.getNext
@@ -1476,7 +1497,7 @@ object BytecodePatcher {
                   getDeclaredField.owner == "java/lang/Class" &&
                   getDeclaredField.name == "getDeclaredField" &&
                   getOffsetStatic.getOpcode == INVOKEVIRTUAL &&
-                  getOffsetStatic.owner == "scala/runtime/LazyVals$" &&
+                  getOffsetStatic.owner == LazyValsObj &&
                   getOffsetStatic.name == "getOffsetStatic" &&
                   putStatic.getOpcode == PUTSTATIC =>
               // Pattern matched!
@@ -1640,7 +1661,7 @@ object BytecodePatcher {
       current match {
         case getStatic: FieldInsnNode
             if getStatic.getOpcode == GETSTATIC &&
-              getStatic.owner == "scala/runtime/LazyVals$" &&
+              getStatic.owner == LazyValsObj &&
               getStatic.name == "MODULE$" =>
           // Found potential start of CAS pattern
           var next1 = getStatic.getNext
@@ -1664,7 +1685,7 @@ object BytecodePatcher {
                 scanPtr match {
                   case methodInsn: MethodInsnNode
                       if methodInsn.getOpcode == INVOKEVIRTUAL &&
-                        methodInsn.owner == "scala/runtime/LazyVals$" &&
+                        methodInsn.owner == LazyValsObj &&
                         methodInsn.name == "objCAS" =>
                     foundObjCas = true
                     objCasNode = methodInsn
@@ -1979,7 +2000,7 @@ object BytecodePatcher {
       current match {
         case getStatic: FieldInsnNode
             if getStatic.getOpcode == GETSTATIC &&
-              getStatic.owner == "scala/runtime/LazyVals$" &&
+              getStatic.owner == LazyValsObj &&
               getStatic.name == "MODULE$" =>
           var next1 = getStatic.getNext
           var next2 = if (next1 != null) next1.getNext else null
@@ -2000,7 +2021,7 @@ object BytecodePatcher {
                 scanPtr match {
                   case methodInsn: MethodInsnNode
                       if methodInsn.getOpcode == INVOKEVIRTUAL &&
-                        methodInsn.owner == "scala/runtime/LazyVals$" &&
+                        methodInsn.owner == LazyValsObj &&
                         methodInsn.name == "objCAS" =>
                     foundObjCas = true
                     objCasNode = methodInsn

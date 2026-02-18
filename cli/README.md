@@ -14,7 +14,7 @@ Build the assembly jar (fat jar with all dependencies):
 sbt cli/assembly
 ```
 
-The jar will be created at: `cli/target/scala-3.7.3/lazyvalgrade.jar`
+The jar will be created at: `cli/target/scala-3.8.1/lazyvalgrade.jar`
 
 ## Usage
 
@@ -36,7 +36,7 @@ The tool will:
 sbt cli/assembly
 
 # Patch all classfiles in a directory
-java -jar cli/target/scala-3.7.3/lazyvalgrade.jar /path/to/classes
+java -jar cli/target/scala-3.8.1/lazyvalgrade.jar /path/to/classes
 ```
 
 ## Output

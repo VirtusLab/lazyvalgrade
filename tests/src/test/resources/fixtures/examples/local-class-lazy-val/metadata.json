@@ -1,0 +1,13 @@
+{
+  "description": "Local class defined inside a method with lazy val",
+  "mainClassName": "main",
+  "expectedClasses": [
+    {
+      "className": "LocalClassTest$Local$1",
+      "lazyVals": [
+        { "name": "value", "index": 1 }
+      ]
+    }
+  ],
+  "expectedOutput": "value = local"
+}

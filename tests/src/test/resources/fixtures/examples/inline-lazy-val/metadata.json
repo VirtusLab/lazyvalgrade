@@ -1,0 +1,13 @@
+{
+  "description": "Lazy val initialized from inline method",
+  "mainClassName": "main",
+  "expectedClasses": [
+    {
+      "className": "InlineLazy$",
+      "lazyVals": [
+        { "name": "value", "index": 1 }
+      ]
+    }
+  ],
+  "expectedOutput": "value = inlined"
+}

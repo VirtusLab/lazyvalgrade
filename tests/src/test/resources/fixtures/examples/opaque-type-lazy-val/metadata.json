@@ -1,0 +1,13 @@
+{
+  "description": "Lazy val with opaque type (erasure behavior testing)",
+  "mainClassName": "main",
+  "expectedClasses": [
+    {
+      "className": "Types$",
+      "lazyVals": [
+        { "name": "defaultName", "index": 1 }
+      ]
+    }
+  ],
+  "expectedOutput": "name = opaque"
+}

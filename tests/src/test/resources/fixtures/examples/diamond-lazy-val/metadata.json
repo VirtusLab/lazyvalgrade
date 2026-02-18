@@ -1,0 +1,15 @@
+{
+  "description": "Diamond inheritance pattern with lazy vals from shared ancestor and both branches",
+  "mainClassName": "main",
+  "expectedClasses": [
+    {
+      "className": "Diamond",
+      "lazyVals": [
+        { "name": "value", "index": 1 },
+        { "name": "leftOnly", "index": 1 },
+        { "name": "rightOnly", "index": 1 }
+      ]
+    }
+  ],
+  "expectedOutput": "base, left, right"
+}

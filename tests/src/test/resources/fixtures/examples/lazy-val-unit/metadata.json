@@ -1,0 +1,13 @@
+{
+  "description": "Lazy val returning Unit (BoxedUnit storage handling)",
+  "mainClassName": "main",
+  "expectedClasses": [
+    {
+      "className": "LazyUnit$",
+      "lazyVals": [
+        { "name": "doStuff", "index": 1 }
+      ]
+    }
+  ],
+  "expectedOutput": "sideEffect = 1"
+}

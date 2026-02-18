@@ -24,7 +24,7 @@ echo ""
 
 # Get the project root directory
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ASSEMBLY_JAR="${PROJECT_ROOT}/cli/target/scala-3.7.3/lazyvalgrade.jar"
+ASSEMBLY_JAR="${PROJECT_ROOT}/cli/target/scala-3.8.1/lazyvalgrade.jar"
 
 # Check if assembly jar exists
 if [ ! -f "$ASSEMBLY_JAR" ]; then

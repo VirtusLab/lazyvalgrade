@@ -9,6 +9,7 @@ import java.nio.file.{Files, Paths, Path}
 import scala.util.{Try, Using, boundary}
 import scala.util.boundary.break
 import scala.collection.immutable.TreeSet
+import scala.compiletime.uninitialized
 
 /** End-to-end test suite for bytecode patching.
   *
@@ -71,6 +72,8 @@ class BytecodePatchingTests extends FunSuite with ExampleLoader {
 
   val cleanupWorkspace: Boolean = false
 
+  var agentJarPath: os.Path = uninitialized
+
   override val quietTests: Boolean = false // BytecodePatchingTests is quiet by default
 
   /** Helper to print only when not in quiet mode */
@@ -104,6 +107,11 @@ class BytecodePatchingTests extends FunSuite with ExampleLoader {
       case _ =>
         throw new RuntimeException(s"Could not parse Java version from: $javaVersionLine")
     }
+
+    // Agent jar is built automatically by sbt (Test/test dependsOn agent/assembly)
+    agentJarPath = os.pwd / "agent" / "target" / "scala-3.8.1" / "lazyvalgrade-agent.jar"
+    assert(os.exists(agentJarPath), s"Agent jar not found: $agentJarPath (should be built by sbt automatically)")
+    log(s"✓ Agent jar: $agentJarPath")
   }
 
   /** Load and compile all examples */
@@ -266,6 +274,27 @@ class BytecodePatchingTests extends FunSuite with ExampleLoader {
       .proc("java", "-cp", fullClasspath, mainClass)
       .call(check = false, stderr = os.Pipe)
 
+    (result.exitCode, result.out.text().trim, result.err.text().trim)
+  }
+
+  /** Check that stderr has no Unsafe warnings from the application's own scala runtime.
+    * The agent's shaded internal runtime (lazyvalgrade.shaded.scala.runtime.LazyVals$) may
+    * still trigger Unsafe warnings since the agent itself is compiled with Scala 3.7.x,
+    * but those don't affect the user's application.
+    */
+  private def hasAppUnsafeWarning(stderr: String): Boolean =
+    stderr.linesIterator.exists { line =>
+      line.contains("has been called by") &&
+      line.contains("LazyVals") &&
+      !line.contains("lazyvalgrade.shaded.")
+    }
+
+  /** Runs a classfile with java agent and captures stdout and stderr. */
+  def runWithAgent(outputDir: os.Path, scalaLibClasspath: String, mainClass: String): (Int, String, String) = {
+    val fullClasspath = s"${outputDir}:${scalaLibClasspath}"
+    val result = os
+      .proc("java", s"-javaagent:$agentJarPath", "-cp", fullClasspath, mainClass)
+      .call(check = false, stderr = os.Pipe)
     (result.exitCode, result.out.text().trim, result.err.text().trim)
   }
 
@@ -524,6 +553,77 @@ class BytecodePatchingTests extends FunSuite with ExampleLoader {
             }
           }
         }
+      }
+    }
+  }
+
+  // ===== Agent runtime tests (individual per example × version) =====
+
+  // Filter to examples that have lazy vals and expected output (cheap: metadata only, no compilation)
+  private val agentTestableExamples = discoveredExamples.filter { ex =>
+    isExampleSelected(ex.name) &&
+    ex.metadata.expectedClasses.exists(_.lazyVals.nonEmpty) &&
+    ex.metadata.expectedOutput.isDefined
+  }
+
+  // Register individual agent tests for each example × patchable version
+  for {
+    discovered <- agentTestableExamples
+    version <- patchableVersions.toSeq.sorted
+    if isScalaVersionSelected(version)
+  } {
+    test(s"Agent runtime: ${discovered.name} with $version") {
+      val example = examples.find(_.name == discovered.name).get
+      val expectedOutput = example.metadata.expectedOutput.get
+      val mainClassName = example.metadata.mainClassName
+
+      example.compilationResult.results.get(version) match {
+        case Some(versionResult) if versionResult.success =>
+          val outputDir = os.Path(versionResult.classFiles.head.absolutePath.toNIO.getParent)
+          val classpathVersion = if (needsTargetRuntime(version)) targetVersion else version
+          val targetDir = testWorkspace / example.name / classpathVersion
+          val scalaLibClasspath = getScalaCliClasspath(targetDir, classpathVersion)
+          val (exitCode, stdout, stderr) = runWithAgent(outputDir, scalaLibClasspath, mainClassName)
+
+          assertEquals(stdout, expectedOutput, s"Agent with $version should produce correct output")
+          assert(
+            !hasAppUnsafeWarning(stderr),
+            s"Agent with $version should NOT have application Unsafe warning, but got: $stderr"
+          )
+          log(s"  ✓ [${discovered.name}/$version] Correct output and no application Unsafe warnings")
+
+        case _ =>
+          fail(s"Version $version was not successfully compiled for ${discovered.name}")
+      }
+    }
+  }
+
+  // Register individual agent tests for 3.8+ pass-through
+  for {
+    discovered <- agentTestableExamples
+    if isScalaVersionSelected(targetVersion)
+  } {
+    test(s"Agent runtime: ${discovered.name} with $targetVersion (pass-through)") {
+      val example = examples.find(_.name == discovered.name).get
+      val expectedOutput = example.metadata.expectedOutput.get
+      val mainClassName = example.metadata.mainClassName
+
+      example.compilationResult.results.get(targetVersion) match {
+        case Some(versionResult) if versionResult.success =>
+          val outputDir = os.Path(versionResult.classFiles.head.absolutePath.toNIO.getParent)
+          val targetDir = testWorkspace / example.name / targetVersion
+          val scalaLibClasspath = getScalaCliClasspath(targetDir, targetVersion)
+          val (exitCode, stdout, stderr) = runWithAgent(outputDir, scalaLibClasspath, mainClassName)
+
+          assertEquals(stdout, expectedOutput, s"Agent with $targetVersion should produce correct output")
+          assert(
+            !hasAppUnsafeWarning(stderr),
+            s"Agent with $targetVersion should NOT have application Unsafe warning, but got: $stderr"
+          )
+          log(s"  ✓ [${discovered.name}/$targetVersion] Correct output and no Unsafe warnings")
+
+        case _ =>
+          fail(s"Version $targetVersion was not successfully compiled for ${discovered.name}")
       }
     }
   }
