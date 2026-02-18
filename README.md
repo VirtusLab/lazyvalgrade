@@ -48,9 +48,9 @@ LazyValgrade provides bytecode-level transformations using ASM to rewrite lazy v
 
 ### Use Cases
 
-1. **Batch Build Tool** (available now): A standalone CLI tool for build systems to mutate complete application classpaths under closed-world assumption when building application assemblies, producing JDK 26+ compatible artifacts.
+1. **Batch Build Tool**: A standalone CLI tool for build systems to mutate complete application classpaths under closed-world assumption when building application assemblies, producing JDK 26+ compatible artifacts.
 
-2. **Java Agent for Testing** (planned): A preinit class loading mutator that hotfixes classes on-the-fly, enabling test suites to run on JDK 26+ with dependencies compiled with older Scala versions.
+2. **Java Agent**: A `-javaagent:` that hotfixes classes on-the-fly at class loading time, enabling applications and test suites to run on JDK 26+ with dependencies compiled with older Scala versions. No recompilation or pre-processing required.
 
 ### Why This Works
 
@@ -63,6 +63,7 @@ LazyValgrade provides bytecode-level transformations using ASM to rewrite lazy v
 
 - `core/` - Core bytecode analysis, detection, and transformation logic using ASM
 - `cli/` - Command-line interface for batch patching of classfiles
+- `agent/` - Java agent for runtime class transformation (`-javaagent:`)
 - `tests/` - Test suite with fixtures covering all Scala 3.x lazy val variants
 - `testops/` - Development tooling for compiling examples across Scala versions and inspecting bytecode
 
@@ -83,6 +84,21 @@ java -jar cli/target/scala-3.8.1/lazyvalgrade.jar <directory>
 ```
 
 The CLI recursively finds all `.class` files in the given directory, detects Scala 3.0-3.7.x lazy val implementations, and rewrites them to the 3.8+ VarHandle-based format.
+
+### Java Agent (Runtime Patching)
+
+```bash
+# Build the agent
+sbt agent/assembly
+
+# Run any JVM application with the agent
+java -javaagent:agent/target/scala-3.8.1/lazyvalgrade-agent.jar -jar your-app.jar
+
+# Verbose mode (logs patched classes to stderr)
+java -javaagent:agent/target/scala-3.8.1/lazyvalgrade-agent.jar=verbose -jar your-app.jar
+```
+
+The agent intercepts class loading, detects Scala 3.0-3.7.x lazy val bytecode, and rewrites it to the 3.8+ format before the class is loaded. No changes to application code or build required.
 
 ## Goal
 
