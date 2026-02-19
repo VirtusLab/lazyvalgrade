@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# scn — scala-cli-next
+# Runs scala-cli from a fat JAR (not native image) with the lazyvalgrade
+# Java agent injected into both the scala-cli JVM and the forked user JVM.
+
+SCALA_CLI_VERSION="${SCALA_CLI_VERSION:-1.12.1}"
+LAZYVALGRADE_AGENT="${LAZYVALGRADE_AGENT:-$HOME/.lazyvalgrade/agent.jar}"
+
+if [[ ! -f "$LAZYVALGRADE_AGENT" ]]; then
+  echo "scn: agent jar not found: $LAZYVALGRADE_AGENT" >&2
+  echo "  Install it with: sbt agentInstall" >&2
+  echo "  Or set LAZYVALGRADE_AGENT to the correct path" >&2
+  exit 1
+fi
+
+# Fetch scala-cli fat JAR via coursier (cached after first run)
+SCALA_CLI_JAR="$(cs fetch "org.virtuslab.scala-cli:cliBootstrapped:$SCALA_CLI_VERSION" 2>/dev/null)"
+
+if [[ -z "$SCALA_CLI_JAR" ]]; then
+  echo "scn: failed to fetch scala-cli $SCALA_CLI_VERSION via coursier" >&2
+  exit 1
+fi
+
+exec java \
+  "-javaagent:$LAZYVALGRADE_AGENT" \
+  -cp "$SCALA_CLI_JAR" \
+  scala.cli.ScalaCli \
+  --java-opt "-javaagent:$LAZYVALGRADE_AGENT" \
+  "$@"

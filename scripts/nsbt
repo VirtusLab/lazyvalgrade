@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# nsbt — next-sbt
+# Runs sbt with the lazyvalgrade Java agent injected into the sbt JVM.
+# Covers in-process compilation, tests, and run tasks.
+# For forked JVMs, use rnsbt instead.
+
+LAZYVALGRADE_AGENT="${LAZYVALGRADE_AGENT:-$HOME/.lazyvalgrade/agent.jar}"
+
+if [[ ! -f "$LAZYVALGRADE_AGENT" ]]; then
+  echo "nsbt: agent jar not found: $LAZYVALGRADE_AGENT" >&2
+  echo "  Install it with: sbt agentInstall" >&2
+  echo "  Or set LAZYVALGRADE_AGENT to the correct path" >&2
+  exit 1
+fi
+
+exec sbt "-J-javaagent:$LAZYVALGRADE_AGENT" "$@"

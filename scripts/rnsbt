@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# rnsbt — recursive next-sbt
+# Runs sbt with the lazyvalgrade Java agent injected into the sbt JVM
+# AND all forked child JVMs (via JAVA_TOOL_OPTIONS).
+# Note: JAVA_TOOL_OPTIONS causes "Picked up JAVA_TOOL_OPTIONS: ..." on stderr
+# for every JVM launch — this is harmless.
+
+LAZYVALGRADE_AGENT="${LAZYVALGRADE_AGENT:-$HOME/.lazyvalgrade/agent.jar}"
+
+if [[ ! -f "$LAZYVALGRADE_AGENT" ]]; then
+  echo "rnsbt: agent jar not found: $LAZYVALGRADE_AGENT" >&2
+  echo "  Install it with: sbt agentInstall" >&2
+  echo "  Or set LAZYVALGRADE_AGENT to the correct path" >&2
+  exit 1
+fi
+
+export JAVA_TOOL_OPTIONS="-javaagent:$LAZYVALGRADE_AGENT"
+
+exec sbt "-J-javaagent:$LAZYVALGRADE_AGENT" "$@"

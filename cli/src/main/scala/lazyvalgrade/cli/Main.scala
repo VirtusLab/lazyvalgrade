@@ -2,6 +2,7 @@ package lazyvalgrade.cli
 
 import lazyvalgrade.analysis.{LazyValAnalyzer, ClassfileGroup}
 import lazyvalgrade.patching.BytecodePatcher
+import lazyvalgrade.jar.JarProcessor
 import scala.util.{Try, Success, Failure}
 
 /** CLI tool for patching Scala 3.x lazy val bytecode to 3.8+ format.
@@ -34,20 +35,28 @@ object Main {
 
   def main(args: Array[String]): Unit = {
     if (args.length != 1) {
-      Console.err.println(fansi.Color.Red("Error: Expected exactly one argument (directory path)"))
-      Console.err.println("Usage: lazyvalgrade <directory>")
+      Console.err.println(fansi.Color.Red("Error: Expected exactly one argument (directory or JAR path)"))
+      Console.err.println("Usage: lazyvalgrade <directory|file.jar>")
       sys.exit(1)
     }
 
-    val targetDir = os.Path(args(0), os.pwd)
+    val targetPath = os.Path(args(0), os.pwd)
 
-    if (!os.exists(targetDir)) {
-      Console.err.println(fansi.Color.Red(s"Error: Directory does not exist: $targetDir"))
+    if (!os.exists(targetPath)) {
+      Console.err.println(fansi.Color.Red(s"Error: Path does not exist: $targetPath"))
       sys.exit(1)
     }
+
+    // Dispatch to JAR mode or directory mode
+    if (targetPath.ext == "jar") {
+      processJar(targetPath)
+      return
+    }
+
+    val targetDir = targetPath
 
     if (!os.isDir(targetDir)) {
-      Console.err.println(fansi.Color.Red(s"Error: Not a directory: $targetDir"))
+      Console.err.println(fansi.Color.Red(s"Error: Not a directory or JAR file: $targetDir"))
       sys.exit(1)
     }
 
@@ -94,6 +103,44 @@ object Main {
     // Exit with appropriate code
     val summary = computeSummary(results)
     if (!summary.successful) {
+      sys.exit(1)
+    }
+  }
+
+  /** Processes a JAR file in-place: reads, patches, writes back */
+  private def processJar(jarPath: os.Path): Unit = {
+    println(fansi.Bold.On("LazyValGrade - Scala 3.x Lazy Val Bytecode Patcher"))
+    println(fansi.Color.Cyan(s"Processing JAR: $jarPath"))
+    println()
+
+    val input = jarPath.toNIO
+    val tempOutput = os.temp(suffix = ".jar", deleteOnExit = true)
+
+    val result = JarProcessor.process(input, tempOutput.toNIO)
+
+    println(fansi.Bold.On("=" * 80))
+    println(fansi.Bold.On("Summary:"))
+    println(s"  Total classes: ${result.totalClasses}")
+    println(fansi.Color.Green(s"  Patched: ${result.patchedClasses} class(es)"))
+    println(fansi.Color.Blue(s"  Unchanged: ${result.totalClasses - result.patchedClasses - result.failedClasses}"))
+
+    if (result.failedClasses > 0) {
+      println(fansi.Color.Red(s"  Failed: ${result.failedClasses}"))
+      for (error <- result.errors) {
+        println(fansi.Color.Red(s"    - $error"))
+      }
+    }
+
+    if (result.errors.isEmpty) {
+      // Atomically replace original with patched version
+      os.move(tempOutput, jarPath, replaceExisting = true)
+      println()
+      println(fansi.Color.Green(s"✓ JAR patched successfully!"))
+    } else {
+      println()
+      println(fansi.Color.Red("Some classes failed to patch!"))
+      // Still replace — partial patching is better than none
+      os.move(tempOutput, jarPath, replaceExisting = true)
       sys.exit(1)
     }
   }

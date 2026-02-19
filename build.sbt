@@ -74,6 +74,8 @@ lazy val cli = project
   )
   .dependsOn(core)
 
+lazy val processDeps = taskKey[Classpath]("Process agent dependency JARs to patch lazy vals")
+
 lazy val agent = project
   .in(file("agent"))
   .settings(
@@ -83,6 +85,40 @@ lazy val agent = project
     libraryDependencies ++= Seq(
       "com.outr" %% "scribe-file" % "3.15.0"
     ),
+    processDeps := {
+      val log = streams.value.log
+      val cliJar = (cli / assembly).value
+      val deps = (Compile / dependencyClasspath).value
+      val processedDir = target.value / "processed-deps"
+      IO.createDirectory(processedDir)
+
+      val depJars = deps.files.filter(_.getName.endsWith(".jar"))
+      // Build full classpath: CLI jar + all dependency JARs so ASM can resolve class hierarchies
+      val fullCp = (cliJar +: depJars).map(_.getAbsolutePath).mkString(java.io.File.pathSeparator)
+
+      val processedFiles = depJars.map { depJar =>
+        val dest = processedDir / depJar.getName
+        IO.copyFile(depJar, dest)
+        log.info(s"Processing ${depJar.getName}...")
+        val exitCode = scala.sys.process.Process(
+          Seq("java", "-cp", fullCp, "lazyvalgrade.cli.Main", dest.getAbsolutePath)
+        ).!(log)
+        if (exitCode != 0) {
+          throw new MessageOnlyException(s"Failed to process ${depJar.getName} (exit code $exitCode)")
+        }
+        Attributed.blank(dest)
+      }
+
+      processedFiles
+    },
+    assembly / fullClasspath := {
+      val processed = processDeps.value
+      val deps = (Compile / dependencyClasspath).value
+      val ownProducts = (Compile / products).value.map(Attributed.blank)
+      // Keep non-JAR entries (class directories from project dependencies like core)
+      val nonJarDeps = deps.filterNot(_.data.getName.endsWith(".jar"))
+      ownProducts ++ nonJarDeps ++ processed
+    },
     assembly / assemblyJarName := "lazyvalgrade-agent.jar",
     assembly / assemblyMergeStrategy := {
       case PathList("META-INF", "MANIFEST.MF") => MergeStrategy.discard
@@ -105,11 +141,20 @@ lazy val agent = project
   )
   .dependsOn(core)
 
+lazy val agentInstall = taskKey[Unit]("Build agent assembly and install to ~/.lazyvalgrade/agent.jar")
+
 lazy val root = project
   .in(file("."))
   .settings(
     name := "lazyvalgrade",
     scalaVersion := "3.8.1",
+    agentInstall := {
+      val assembled = (agent / assembly).value
+      val target = Path.userHome / ".lazyvalgrade" / "agent.jar"
+      IO.createDirectory(target.getParentFile)
+      IO.copyFile(assembled, target)
+      streams.value.log.info(s"Installed agent to $target")
+    },
     addCommandAlias("compileExamples", "testops/runMain lazyvalgrade.CompileExamplesMain"),
     addCommandAlias("compileExamplesWithPatching", "testops/runMain lazyvalgrade.CompileExamplesMain --patch")
   )
