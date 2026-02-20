@@ -91,7 +91,8 @@ object BytecodePatcher {
       val (lazyVals, version) = detectionResult match {
         case LazyValDetectionResult.NoLazyVals => return PatchResult.NotApplicable
         case LazyValDetectionResult.LazyValsFound(lvs, ver) => (lvs, ver)
-        case LazyValDetectionResult.MixedVersions(_) => return PatchResult.Failed("Mixed Scala versions detected")
+        case LazyValDetectionResult.MixedVersions(lvs) =>
+          return PatchResult.Failed(buildDiagnostic("Mixed Scala versions detected", name, classInfo, lvs))
       }
 
       // Dispatch to version-specific patching
@@ -100,7 +101,8 @@ object BytecodePatcher {
         case ScalaVersion.Scala32x => patchScala32x(bytes, classInfo, lazyVals, name, classLoader = classLoader)
         case ScalaVersion.Scala33x_37x => patchScala33x_37x(bytes, classInfo, lazyVals, name, None, None, classLoader = classLoader)
         case ScalaVersion.Scala38Plus => PatchResult.NotApplicable
-        case ScalaVersion.Unknown => PatchResult.Failed("Unknown Scala version detected")
+        case ScalaVersion.Unknown(reason) =>
+          PatchResult.Failed(buildDiagnostic(s"Unknown Scala version detected: $reason", name, classInfo, lazyVals))
       }
 
     case ClassfileGroup.CompanionPair(
@@ -131,8 +133,12 @@ object BytecodePatcher {
             return PatchResult.Failed(s"Companion class and object have different Scala versions: $clsVer vs $objVer")
           }
           (objLvs, clsLvs, objVer)
-        case (LazyValDetectionResult.MixedVersions(_), _) | (_, LazyValDetectionResult.MixedVersions(_)) =>
-          return PatchResult.Failed("Mixed Scala versions detected")
+        case (LazyValDetectionResult.MixedVersions(lvs), _) =>
+          val allLvs = lvs ++ (classDetectionResult match { case LazyValDetectionResult.LazyValsFound(l, _) => l; case _ => Seq.empty })
+          return PatchResult.Failed(buildDiagnostic("Mixed Scala versions detected in companion object", companionObjectName, companionObjectInfo, allLvs))
+        case (_, LazyValDetectionResult.MixedVersions(lvs)) =>
+          val allLvs = (objectDetectionResult match { case LazyValDetectionResult.LazyValsFound(l, _) => l; case _ => Seq.empty }) ++ lvs
+          return PatchResult.Failed(buildDiagnostic("Mixed Scala versions detected in companion class", className, classInfo, allLvs))
       }
 
       // Dispatch to version-specific patching based on what we found
@@ -230,8 +236,39 @@ object BytecodePatcher {
           }
 
         case ScalaVersion.Scala38Plus => PatchResult.NotApplicable
-        case ScalaVersion.Unknown => PatchResult.Failed("Unknown Scala version detected")
+        case ScalaVersion.Unknown(reason) =>
+          val allLvs = objectLazyVals ++ classLazyVals
+          PatchResult.Failed(buildDiagnostic(s"Unknown Scala version detected: $reason", companionObjectName, companionObjectInfo, allLvs))
       }
+  }
+
+  /** Builds a multi-line diagnostic message for Failed results. */
+  private def buildDiagnostic(
+      headline: String,
+      className: String,
+      classInfo: lazyvalgrade.classfile.ClassInfo,
+      lazyVals: Seq[LazyValInfo]
+  ): String = {
+    val sb = new StringBuilder
+    sb.append(headline).append("\n")
+    sb.append(s"  Class: $className\n")
+    sb.append(s"  Fields:\n")
+    classInfo.fields.foreach { f =>
+      sb.append(s"    ${f.name}:${f.descriptor} (access=0x${f.access.toHexString})\n")
+    }
+    sb.append(s"  Methods:\n")
+    classInfo.methods.foreach { m =>
+      sb.append(s"    ${m.name}:${m.descriptor}\n")
+    }
+    sb.append(s"  Lazy vals (${lazyVals.size}):\n")
+    lazyVals.foreach { lv =>
+      val versionStr = lv.version match {
+        case ScalaVersion.Unknown(reason) => s"Unknown($reason)"
+        case other => other.toString
+      }
+      sb.append(s"    ${lv.name} (index=${lv.index}, version=$versionStr)\n")
+    }
+    sb.toString()
   }
 
   // ============================================================================

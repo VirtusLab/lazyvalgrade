@@ -1,0 +1,20 @@
+{
+  "description": "Sealed class hierarchy nested inside abstract class - Container has a compiler-generated lazy val for inner object Step (3.0+), while Container$Step$ has $lzy1-named fields that are NOT lazy vals (eagerly initialized case class companion objects)",
+  "mainClassName": "main",
+  "expectedClasses": [
+    {
+      "className": "Container",
+      "lazyVals": [
+        {
+          "name": "Step",
+          "index": 1
+        }
+      ]
+    },
+    {
+      "className": "Container$Step$",
+      "lazyVals": []
+    }
+  ],
+  "expectedOutput": "first: a\nsecond: b\nthird: c"
+}

@@ -192,20 +192,26 @@ final class LazyValDetector:
         companionClassInfo
       )
 
-      Some(
-        LazyValInfo(
-          name = name,
-          index = index,
-          offsetField = offsetField,
-          offsetFieldLocation = offsetLocation,
-          bitmapField = bitmapField,
-          storageField = storageField,
-          varHandleField = varHandleField,
-          initMethod = initMethod,
-          accessorMethod = accessorMethod,
-          version = version
-        )
-      )
+      version match
+        case ScalaVersion.Unknown(_) if offsetField.isEmpty && bitmapField.isEmpty &&
+          varHandleField.isEmpty && initMethod.isEmpty && !isVolatile(storageField.access) =>
+          debug(s"Skipping field ${storageField.name}: matches $$lzy pattern but has no lazy val infrastructure (likely eager companion object reference)")
+          None
+        case _ =>
+          Some(
+            LazyValInfo(
+              name = name,
+              index = index,
+              offsetField = offsetField,
+              offsetFieldLocation = offsetLocation,
+              bitmapField = bitmapField,
+              storageField = storageField,
+              varHandleField = varHandleField,
+              initMethod = initMethod,
+              accessorMethod = accessorMethod,
+              version = version
+            )
+          )
     }
 
   /** Parses storage field name to extract lazy val name and index.
@@ -379,13 +385,14 @@ final class LazyValDetector:
             debug("Uses LazyVals$.getOffset -> Scala 3.0.x-3.1.x")
             ScalaVersion.Scala30x_31x
           else
-            warn("Bitmap field present but unrecognized <clinit> pattern")
-            warn(s"Bytecode preview: ${bytecode.take(500)}")
-            ScalaVersion.Unknown
+            val reason = s"Bitmap field present but unrecognized <clinit> pattern. Bytecode: ${bytecode.take(500)}"
+            warn(reason)
+            ScalaVersion.Unknown(reason)
         case None =>
-          warn("Bitmap field present but no <clinit> method found")
-          warn(s"Available methods: ${clinitClassInfo.methods.map(_.name).mkString(", ")}")
-          ScalaVersion.Unknown
+          val methods = clinitClassInfo.methods.map(_.name).mkString(", ")
+          val reason = s"Bitmap field present but no <clinit> method. Available methods: $methods"
+          warn(reason)
+          ScalaVersion.Unknown(reason)
 
     // Check for Object-based with OFFSET (3.3-3.7.x)
     else if offsetField.isDefined &&
@@ -400,16 +407,20 @@ final class LazyValDetector:
             debug("Uses objCAS with Object field -> Scala 3.3.x-3.7.x")
             ScalaVersion.Scala33x_37x
           else
-            warn("Object field with OFFSET but no objCAS found")
-            ScalaVersion.Unknown
+            val reason = s"Object field with OFFSET but no objCAS in initMethod ${method.name}. Bytecode: ${method.bytecodeText.take(500)}"
+            warn(reason)
+            ScalaVersion.Unknown(reason)
         case None =>
-          ScalaVersion.Unknown
+          val reason = "Object field with OFFSET but initMethod is None despite isDefined guard"
+          warn(reason)
+          ScalaVersion.Unknown(reason)
     else
       debug(s"Could not determine version for field ${storageField.name}")
       debug(s"  offsetField=${offsetField.isDefined} initMethod=${initMethod.isDefined}")
       debug(s"  descriptor=${storageField.descriptor} (expected: Ljava/lang/Object;)")
       debug(s"  isVolatile=${isVolatile(storageField.access)}")
-      ScalaVersion.Unknown
+      val reason = s"No pattern matched. offsetField=${offsetField.isDefined} initMethod=${initMethod.isDefined} descriptor=${storageField.descriptor} isVolatile=${isVolatile(storageField.access)}"
+      ScalaVersion.Unknown(reason)
 
   /** Checks if access flags indicate a static field. */
   private def isStatic(access: Int): Boolean =

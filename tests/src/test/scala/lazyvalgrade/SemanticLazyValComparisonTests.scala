@@ -78,7 +78,7 @@ class SemanticLazyValComparisonTests extends FunSuite with ExampleLoader {
   def findClassFile(example: LoadedExample, scalaVersion: String, className: String): Option[Path] = {
     example.compilationResult.results.get(scalaVersion).flatMap { versionResult =>
       versionResult.classFiles
-        .find(_.relativePath.endsWith(s"$className.class"))
+        .find(cf => cf.relativePath == s"$className.class" || cf.relativePath.endsWith(s"/$className.class"))
         .map(_.absolutePath.toNIO)
     }
   }
@@ -232,8 +232,16 @@ class SemanticLazyValComparisonTests extends FunSuite with ExampleLoader {
         val bytes = Files.readAllBytes(classFileOpt.get)
         val classInfo = ClassfileParser.parse(bytes).toOption.get
 
+        // Load companion class if needed (for module classes ending with $)
+        val companionOpt = if expectedClass.className.endsWith("$") then
+          val companionClassName = expectedClass.className.dropRight(1)
+          findClassFile(example, version, companionClassName).flatMap { companionPath =>
+            ClassfileParser.parse(Files.readAllBytes(companionPath)).toOption
+          }
+        else None
+
         // Compare with itself
-        val result = SemanticLazyValComparator.compare(classInfo, classInfo)
+        val result = SemanticLazyValComparator.compare(classInfo, classInfo, companionOpt, companionOpt)
 
         assert(
           result.areIdentical,

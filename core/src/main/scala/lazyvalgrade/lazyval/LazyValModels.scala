@@ -28,7 +28,7 @@ enum ScalaVersion:
   case Scala38Plus
 
   /** Could not determine version (no lazy vals or unrecognized pattern) */
-  case Unknown
+  case Unknown(reason: String)
 
   def isLegacy: Boolean = this match
     case Scala30x_31x | Scala32x | Scala33x_37x => true

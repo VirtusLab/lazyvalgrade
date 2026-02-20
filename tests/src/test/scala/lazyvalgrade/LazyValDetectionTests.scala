@@ -77,7 +77,7 @@ class LazyValDetectionTests extends FunSuite with ExampleLoader {
   def findClassFile(example: LoadedExample, scalaVersion: String, className: String): Option[Path] = {
     example.compilationResult.results.get(scalaVersion).flatMap { versionResult =>
       versionResult.classFiles
-        .find(_.relativePath.endsWith(s"$className.class"))
+        .find(cf => cf.relativePath == s"$className.class" || cf.relativePath.endsWith(s"/$className.class"))
         .map(_.absolutePath.toNIO)
     }
   }
@@ -145,10 +145,11 @@ class LazyValDetectionTests extends FunSuite with ExampleLoader {
                 )
 
                 // IMPORTANT: Tests should never detect Unknown version since we compile with known Scala 3 versions
-                assert(
-                  version != ScalaVersion.Unknown,
-                  s"Detected Unknown version for known Scala $scalaVersion - this indicates a bug in detection logic. LazyVals: ${lazyVals.map(lv => s"${lv.name} (version=${lv.version})").mkString(", ")}"
-                )
+                version match {
+                  case ScalaVersion.Unknown(reason) =>
+                    fail(s"Detected Unknown version for known Scala $scalaVersion - this indicates a bug in detection logic. Reason: $reason. LazyVals: ${lazyVals.map(lv => s"${lv.name} (version=${lv.version})").mkString(", ")}")
+                  case _ => // OK
+                }
 
                 // Check version detection
                 assertEquals(version, expectedVersion, s"Expected $expectedVersion but detected $version")

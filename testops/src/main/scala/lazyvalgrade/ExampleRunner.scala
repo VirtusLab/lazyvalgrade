@@ -318,8 +318,8 @@ class ExampleRunner(
 
           detectionResult match {
             case LazyValDetectionResult.NoLazyVals => // OK
-            case LazyValDetectionResult.LazyValsFound(lazyVals, ScalaVersion.Unknown) =>
-              break(Left(s"Detected Unknown version for ${group.primaryName} compiled with Scala $scalaVersion. LazyVals: ${lazyVals.map(lv => s"${lv.name} (version=${lv.version})").mkString(", ")}"))
+            case LazyValDetectionResult.LazyValsFound(lazyVals, ScalaVersion.Unknown(reason)) =>
+              break(Left(s"Detected Unknown version for ${group.primaryName} compiled with Scala $scalaVersion: $reason. LazyVals: ${lazyVals.map(lv => s"${lv.name} (version=${lv.version})").mkString(", ")}"))
             case LazyValDetectionResult.LazyValsFound(_, _) => // OK
             case LazyValDetectionResult.MixedVersions(lazyVals) =>
               val versionBreakdown = lazyVals.groupBy(_.version).map { case (v, lvs) => s"$v: ${lvs.map(_.name).mkString(", ")}" }.mkString("; ")

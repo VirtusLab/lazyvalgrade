@@ -221,7 +221,7 @@ final class SemanticLazyValComparator:
           accessorSkeleton = accessorSkeleton
         )
 
-      case ScalaVersion.Unknown =>
+      case ScalaVersion.Unknown(_) =>
         LazyValCanonicalPattern.Unknown
 
   /** Extracts OFFSET field initialization pattern from <clinit> static initializer.

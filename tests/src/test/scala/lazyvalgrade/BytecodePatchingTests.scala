@@ -141,7 +141,7 @@ class BytecodePatchingTests extends FunSuite with ExampleLoader {
   /** Finds a compiled classfile for a specific example, Scala version, and class name. */
   def findClassFile(example: LoadedExample, scalaVersion: String, className: String): Option[Path] = {
     example.compilationResult.results.get(scalaVersion).flatMap { versionResult =>
-      versionResult.classFiles.find(_.relativePath.endsWith(s"$className.class")).map(_.absolutePath.toNIO)
+      versionResult.classFiles.find(cf => cf.relativePath == s"$className.class" || cf.relativePath.endsWith(s"/$className.class")).map(_.absolutePath.toNIO)
     }
   }
 
@@ -189,8 +189,8 @@ class BytecodePatchingTests extends FunSuite with ExampleLoader {
 
             detectionResult match {
               case LazyValDetectionResult.NoLazyVals => // OK
-              case LazyValDetectionResult.LazyValsFound(lazyVals, ScalaVersion.Unknown) =>
-                break(Left(s"Detected Unknown version for ${group.primaryName} compiled with Scala $version. LazyVals: ${lazyVals.map(lv => s"${lv.name} (version=${lv.version})").mkString(", ")}"))
+              case LazyValDetectionResult.LazyValsFound(lazyVals, ScalaVersion.Unknown(reason)) =>
+                break(Left(s"Detected Unknown version for ${group.primaryName} compiled with Scala $version: $reason. LazyVals: ${lazyVals.map(lv => s"${lv.name} (version=${lv.version})").mkString(", ")}"))
               case LazyValDetectionResult.LazyValsFound(_, _) => // OK
               case LazyValDetectionResult.MixedVersions(lazyVals) =>
                 val versionBreakdown = lazyVals.groupBy(_.version).map { case (v, lvs) => s"$v: ${lvs.map(_.name).mkString(", ")}" }.mkString("; ")

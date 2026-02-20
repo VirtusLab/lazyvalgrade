@@ -143,7 +143,7 @@ final class LazyValComparator:
   /** Gets overall version from detection result. */
   private def getOverallVersion(result: LazyValDetectionResult): ScalaVersion =
     result match
-      case LazyValDetectionResult.NoLazyVals => ScalaVersion.Unknown
+      case LazyValDetectionResult.NoLazyVals => ScalaVersion.Unknown("no lazy vals detected")
       case LazyValDetectionResult.LazyValsFound(_, version) => version
       case LazyValDetectionResult.MixedVersions(lazyVals) =>
         // Return most common version

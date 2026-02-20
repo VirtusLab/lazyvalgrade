@@ -163,12 +163,9 @@ class LazyValGradeTransformer(config: AgentConfig) extends ClassFileTransformer 
               null
 
             case Some(BytecodePatcher.PatchResult.Failed(error)) =>
-              if (config.debug) System.err.println(s"[lazyvalgrade-debug] transform($dotName) → Failed: $error")
-              debug(s"  patch() -> Failed: $error")
-              if (config.verbose) {
-                System.err.println(s"[lazyvalgrade] Failed to patch $dotName: $error")
-              }
-              null
+              val msg = s"[lazyvalgrade] FATAL: Failed to patch $dotName:\n$error"
+              System.err.println(msg)
+              throw new lazyvalgrade.patching.LazyValPatchingException(msg)
 
             case None =>
               debug(s"  no groups to patch")
@@ -176,6 +173,9 @@ class LazyValGradeTransformer(config: AgentConfig) extends ClassFileTransformer 
           }
       }
     } catch {
+      case t: lazyvalgrade.patching.LazyValPatchingException =>
+        // Re-throw diagnostic exceptions — the class must not load with broken bytecode
+        throw t
       case t: Throwable =>
         if (config.debug) System.err.println(s"[lazyvalgrade-debug] transform($dotName) → EXCEPTION: ${t.getClass.getName}: ${t.getMessage}")
         debug(s"  EXCEPTION in transform($dotName): ${t.getClass.getName}: ${t.getMessage}")
