@@ -17,10 +17,14 @@ import lazyvalgrade.patching.BytecodePatcher
   */
 class LazyValGradeTransformer(config: AgentConfig) extends ClassFileTransformer {
 
-  /** Packages to always skip (JDK internals, our own code, Scala runtime). */
+  /** Packages to always skip (JDK internals, our own code, Scala runtime).
+    * NOTE: "scala/runtime/" is constructed via StringBuilder to prevent sbt-assembly
+    * shade rules from rewriting it to "lazyvalgrade/shaded/scala/runtime/".
+    * The agent receives UNSHADED class names from the JVM.
+    */
   private val skipPrefixes = Array(
     "java/", "javax/", "jdk/", "sun/", "com/sun/",
-    "lazyvalgrade/", "scala/runtime/"
+    "lazyvalgrade/", new StringBuilder("sca").append("la/runtime/").toString
   )
 
   /** Buffer for patched companion bytes. When one side of a companion pair is patched,
@@ -47,9 +51,12 @@ class LazyValGradeTransformer(config: AgentConfig) extends ClassFileTransformer 
 
     val dotName = className.replace('/', '.')
 
+    if (config.debug) System.err.println(s"[lazyvalgrade-debug] transform($dotName) ENTER")
+
     // Check if companion already patched this class
     val buffered = patchedCompanionBuffer.remove(dotName)
     if (buffered != null) {
+      if (config.debug) System.err.println(s"[lazyvalgrade-debug] transform($dotName) → BUFFERED (${buffered.length} bytes)")
       debug(s"transform($dotName): returning buffered companion bytes (${buffered.length} bytes)")
       if (config.verbose) {
         System.err.println(s"[lazyvalgrade] Patched (buffered): $dotName")
@@ -120,8 +127,9 @@ class LazyValGradeTransformer(config: AgentConfig) extends ClassFileTransformer 
           debug(s"  group() returned ${groups.size} group(s): ${groups.map(g => s"${g.getClass.getSimpleName}(${g.primaryName})").mkString(", ")}")
 
           // There should be exactly one group (single or companion pair)
-          groups.headOption.map(BytecodePatcher.patch) match {
+          groups.headOption.map(BytecodePatcher.patch(_, classLoader = Some(loader))) match {
             case Some(BytecodePatcher.PatchResult.PatchedSingle(name, patchedBytes)) =>
+              if (config.debug) System.err.println(s"[lazyvalgrade-debug] transform($dotName) → PatchedSingle($name, ${patchedBytes.length} bytes)")
               debug(s"  patch() -> PatchedSingle($name, ${patchedBytes.length} bytes)")
               if (config.debug) dumpBytes(name, patchedBytes)
               if (config.verbose) {
@@ -130,6 +138,7 @@ class LazyValGradeTransformer(config: AgentConfig) extends ClassFileTransformer 
               patchedBytes
 
             case Some(BytecodePatcher.PatchResult.PatchedPair(objName, clsName, objBytes, clsBytes)) =>
+              if (config.debug) System.err.println(s"[lazyvalgrade-debug] transform($dotName) → PatchedPair(obj=$objName, cls=$clsName)")
               // Determine which side is the current class and buffer the other
               val (currentBytes, companionName, companionPatchedBytes) =
                 if (dotName == objName) (objBytes, clsName, clsBytes)
@@ -149,10 +158,12 @@ class LazyValGradeTransformer(config: AgentConfig) extends ClassFileTransformer 
               currentBytes
 
             case Some(BytecodePatcher.PatchResult.NotApplicable) =>
+              if (config.debug) System.err.println(s"[lazyvalgrade-debug] transform($dotName) → NotApplicable")
               debug(s"  patch() -> NotApplicable")
               null
 
             case Some(BytecodePatcher.PatchResult.Failed(error)) =>
+              if (config.debug) System.err.println(s"[lazyvalgrade-debug] transform($dotName) → Failed: $error")
               debug(s"  patch() -> Failed: $error")
               if (config.verbose) {
                 System.err.println(s"[lazyvalgrade] Failed to patch $dotName: $error")
@@ -166,6 +177,7 @@ class LazyValGradeTransformer(config: AgentConfig) extends ClassFileTransformer 
       }
     } catch {
       case t: Throwable =>
+        if (config.debug) System.err.println(s"[lazyvalgrade-debug] transform($dotName) → EXCEPTION: ${t.getClass.getName}: ${t.getMessage}")
         debug(s"  EXCEPTION in transform($dotName): ${t.getClass.getName}: ${t.getMessage}")
         if (config.debug) {
           val sw = new java.io.StringWriter()

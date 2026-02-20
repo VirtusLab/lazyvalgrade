@@ -68,14 +68,22 @@ object BytecodePatcher {
   val EvaluatingDesc: String = "L" + Evaluating + ";"
   val LazyValsObjDesc: String = "L" + LazyValsObj + ";"
 
+  /** Creates a ClassWriter, using the provided ClassLoader for class hierarchy resolution if available. */
+  private def makeClassWriter(classLoader: Option[ClassLoader]): ClassWriter =
+    classLoader match
+      case Some(cl) => new ClassLoaderClassWriter(cl)
+      case None     => new ClassWriter(ClassWriter.COMPUTE_FRAMES)
+
   /** Patches a classfile group to 3.8+ format, handling both single files and companion pairs.
     *
     * @param group
     *   The classfile group (single or companion pair)
+    * @param classLoader
+    *   Optional ClassLoader for resolving class hierarchies during frame computation
     * @return
     *   PatchResult indicating success, failure, or not applicable
     */
-  def patch(group: ClassfileGroup): PatchResult = group match {
+  def patch(group: ClassfileGroup, classLoader: Option[ClassLoader] = None): PatchResult = group match {
     case ClassfileGroup.Single(name, classInfo, bytes) =>
       // Detect lazy vals in single class (no companion)
       val detectionResult = LazyValDetector.detect(classInfo, None)
@@ -88,9 +96,9 @@ object BytecodePatcher {
 
       // Dispatch to version-specific patching
       version match {
-        case ScalaVersion.Scala30x_31x => patchScala30x_31x(bytes, classInfo, lazyVals, name)
-        case ScalaVersion.Scala32x => patchScala32x(bytes, classInfo, lazyVals, name)
-        case ScalaVersion.Scala33x_37x => patchScala33x_37x(bytes, classInfo, lazyVals, name, None, None)
+        case ScalaVersion.Scala30x_31x => patchScala30x_31x(bytes, classInfo, lazyVals, name, classLoader = classLoader)
+        case ScalaVersion.Scala32x => patchScala32x(bytes, classInfo, lazyVals, name, classLoader = classLoader)
+        case ScalaVersion.Scala33x_37x => patchScala33x_37x(bytes, classInfo, lazyVals, name, None, None, classLoader = classLoader)
         case ScalaVersion.Scala38Plus => PatchResult.NotApplicable
         case ScalaVersion.Unknown => PatchResult.Failed("Unknown Scala version detected")
       }
@@ -139,18 +147,20 @@ object BytecodePatcher {
                 companionObjectInfo,
                 objectLazyVals,
                 companionObjectName,
-                Some((className, classInfo, classBytes))
+                Some((className, classInfo, classBytes)),
+                classLoader = classLoader
               )
             case (false, true) =>
               // Only class has lazy vals - patch as standalone
-              patchScala30x_31x(classBytes, classInfo, classLazyVals, className)
+              patchScala30x_31x(classBytes, classInfo, classLazyVals, className, classLoader = classLoader)
             case (true, true) =>
               // BOTH have lazy vals - need to patch both independently
               patchCompanionPairBothHaveLazyVals30x_31x(
                 companionObjectName, className,
                 companionObjectInfo, classInfo,
                 companionObjectBytes, classBytes,
-                objectLazyVals, classLazyVals
+                objectLazyVals, classLazyVals,
+                classLoader = classLoader
               )
             case (false, false) =>
               PatchResult.NotApplicable
@@ -166,18 +176,20 @@ object BytecodePatcher {
                 companionObjectInfo,
                 objectLazyVals,
                 companionObjectName,
-                Some((className, classInfo, classBytes))
+                Some((className, classInfo, classBytes)),
+                classLoader = classLoader
               )
             case (false, true) =>
               // Only class has lazy vals - patch as standalone
-              patchScala30x_31x(classBytes, classInfo, classLazyVals, className)
+              patchScala30x_31x(classBytes, classInfo, classLazyVals, className, classLoader = classLoader)
             case (true, true) =>
               // BOTH have lazy vals - need to patch both independently
               patchCompanionPairBothHaveLazyVals30x_31x(
                 companionObjectName, className,
                 companionObjectInfo, classInfo,
                 companionObjectBytes, classBytes,
-                objectLazyVals, classLazyVals
+                objectLazyVals, classLazyVals,
+                classLoader = classLoader
               )
             case (false, false) =>
               PatchResult.NotApplicable
@@ -195,21 +207,23 @@ object BytecodePatcher {
                   companionObjectInfo,
                   objectLazyVals,
                   companionObjectName,
-                  Some((className, classInfo, classBytes))
+                  Some((className, classInfo, classBytes)),
+                  classLoader = classLoader
                 )
               } else {
-                patchScala33x_37x(companionObjectBytes, companionObjectInfo, objectLazyVals, companionObjectName, None, None)
+                patchScala33x_37x(companionObjectBytes, companionObjectInfo, objectLazyVals, companionObjectName, None, None, classLoader = classLoader)
               }
             case (false, true) =>
               // Only class has lazy vals - patch as standalone
-              patchScala33x_37x(classBytes, classInfo, classLazyVals, className, None, None)
+              patchScala33x_37x(classBytes, classInfo, classLazyVals, className, None, None, classLoader = classLoader)
             case (true, true) =>
               // BOTH have lazy vals - need to patch both independently
               patchCompanionPairBothHaveLazyVals33x_37x(
                 companionObjectName, className,
                 companionObjectInfo, classInfo,
                 companionObjectBytes, classBytes,
-                objectLazyVals, classLazyVals
+                objectLazyVals, classLazyVals,
+                classLoader = classLoader
               )
             case (false, false) =>
               PatchResult.NotApplicable
@@ -237,7 +251,8 @@ object BytecodePatcher {
       classInfo: lazyvalgrade.classfile.ClassInfo,
       lazyVals: Seq[LazyValInfo],
       name: String,
-      companionInfo: Option[(String, lazyvalgrade.classfile.ClassInfo, Array[Byte])] = None
+      companionInfo: Option[(String, lazyvalgrade.classfile.ClassInfo, Array[Byte])] = None,
+      classLoader: Option[ClassLoader] = None
   ): PatchResult = {
     try {
       companionInfo match {
@@ -250,7 +265,7 @@ object BytecodePatcher {
 
           patchCompanionClass30x_31x(companionClassNode)
 
-          val companionWriter = new ClassWriter(ClassWriter.COMPUTE_FRAMES)
+          val companionWriter = makeClassWriter(classLoader)
           companionClassNode.accept(companionWriter)
           val patchedClassBytes = companionWriter.toByteArray
 
@@ -261,7 +276,7 @@ object BytecodePatcher {
 
           patchClassNode30x_31x(objectNode, classInfo.name, lazyVals)
 
-          val objectWriter = new ClassWriter(ClassWriter.COMPUTE_FRAMES)
+          val objectWriter = makeClassWriter(classLoader)
           objectNode.accept(objectWriter)
           val patchedObjectBytes = objectWriter.toByteArray
 
@@ -275,7 +290,7 @@ object BytecodePatcher {
 
           patchClassNode30x_31x(classNode, classInfo.name, lazyVals)
 
-          val writer = new ClassWriter(ClassWriter.COMPUTE_FRAMES)
+          val writer = makeClassWriter(classLoader)
           classNode.accept(writer)
           val patchedBytes = writer.toByteArray
 
@@ -297,7 +312,8 @@ object BytecodePatcher {
       companionObjectBytes: Array[Byte],
       classBytes: Array[Byte],
       objectLazyVals: Seq[LazyValInfo],
-      classLazyVals: Seq[LazyValInfo]
+      classLazyVals: Seq[LazyValInfo],
+      classLoader: Option[ClassLoader] = None
   ): PatchResult = {
     try {
       // Step 1: Patch object (which also patches class to remove OFFSET fields)
@@ -306,7 +322,8 @@ object BytecodePatcher {
         companionObjectInfo,
         objectLazyVals,
         companionObjectName,
-        Some((className, classInfo, classBytes))
+        Some((className, classInfo, classBytes)),
+        classLoader = classLoader
       )
 
       objectPatchResult match {
@@ -319,7 +336,7 @@ object BytecodePatcher {
 
           patchClassNode30x_31x(classNode, className, classLazyVals)
 
-          val writer = new ClassWriter(ClassWriter.COMPUTE_FRAMES)
+          val writer = makeClassWriter(classLoader)
           classNode.accept(writer)
           val finalPatchedClassBytes = writer.toByteArray
 
@@ -1019,9 +1036,10 @@ object BytecodePatcher {
       bytes: Array[Byte],
       classInfo: lazyvalgrade.classfile.ClassInfo,
       lazyVals: Seq[LazyValInfo],
-      name: String
+      name: String,
+      classLoader: Option[ClassLoader] = None
   ): PatchResult = {
-    patchScala30x_31x(bytes, classInfo, lazyVals, name)
+    patchScala30x_31x(bytes, classInfo, lazyVals, name, classLoader = classLoader)
   }
 
   // ============================================================================
@@ -1040,7 +1058,8 @@ object BytecodePatcher {
       companionObjectBytes: Array[Byte],
       classBytes: Array[Byte],
       objectLazyVals: Seq[LazyValInfo],
-      classLazyVals: Seq[LazyValInfo]
+      classLazyVals: Seq[LazyValInfo],
+      classLoader: Option[ClassLoader] = None
   ): PatchResult = {
     try {
       // Check if object lazy vals have OFFSET in companion class
@@ -1054,7 +1073,8 @@ object BytecodePatcher {
           companionObjectInfo,
           objectLazyVals,
           companionObjectName,
-          Some((className, classInfo, classBytes))
+          Some((className, classInfo, classBytes)),
+          classLoader = classLoader
         )
 
         objectPatchResult match {
@@ -1069,7 +1089,7 @@ object BytecodePatcher {
             patchClassNode33x_37x(classNode, className, classLazyVals)
 
             // Write back to bytes
-            val writer = new ClassWriter(ClassWriter.COMPUTE_FRAMES)
+            val writer = makeClassWriter(classLoader)
             classNode.accept(writer)
             val finalPatchedClassBytes = writer.toByteArray
 
@@ -1089,9 +1109,10 @@ object BytecodePatcher {
           objectLazyVals,
           companionObjectName,
           None,
-          None
+          None,
+          classLoader = classLoader
         )
-        val classPatchResult = patchScala33x_37x(classBytes, classInfo, classLazyVals, className, None, None)
+        val classPatchResult = patchScala33x_37x(classBytes, classInfo, classLazyVals, className, None, None, classLoader = classLoader)
 
         (objectPatchResult, classPatchResult) match {
           case (PatchResult.PatchedSingle(_, objBytes), PatchResult.PatchedSingle(_, clsBytes)) =>
@@ -1125,7 +1146,8 @@ object BytecodePatcher {
       lazyVals: Seq[LazyValInfo],
       name: String,
       companionInfo: Option[(String, lazyvalgrade.classfile.ClassInfo, Array[Byte])],
-      unused: Option[Any] = None // For compatibility with old signature
+      unused: Option[Any] = None, // For compatibility with old signature
+      classLoader: Option[ClassLoader] = None
   ): PatchResult = {
     try {
       companionInfo match {
@@ -1146,7 +1168,7 @@ object BytecodePatcher {
           // Patch companion class: just remove OFFSET fields and <clinit>
           patchCompanionClass33x_37x(companionClassNode, lazyVals)
 
-          val companionWriter = new ClassWriter(ClassWriter.COMPUTE_FRAMES)
+          val companionWriter = makeClassWriter(classLoader)
           companionClassNode.accept(companionWriter)
           val patchedClassBytes = companionWriter.toByteArray
 
@@ -1193,7 +1215,7 @@ object BytecodePatcher {
             )
           }
 
-          val objectWriter = new ClassWriter(ClassWriter.COMPUTE_FRAMES)
+          val objectWriter = makeClassWriter(classLoader)
           objectNode.accept(objectWriter)
           val patchedObjectBytes = objectWriter.toByteArray
 
@@ -1209,7 +1231,7 @@ object BytecodePatcher {
           patchClassNode33x_37x(classNode, classInfo.name, lazyVals)
 
           // Write back to bytes
-          val writer = new ClassWriter(ClassWriter.COMPUTE_FRAMES)
+          val writer = makeClassWriter(classLoader)
           classNode.accept(writer)
           val patchedBytes = writer.toByteArray
 

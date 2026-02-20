@@ -165,6 +165,16 @@ class BytecodePatchingTests extends FunSuite with ExampleLoader {
         (className, bytes)
       }.toMap
 
+      // Build a classloader from the classes base directory for class hierarchy resolution
+      val classesBaseUrls = classFiles.headOption.map { cf =>
+        // Derive the base classes directory by stripping the relative path from the absolute path
+        val absStr = cf.absolutePath.toString
+        val relStr = cf.relativePath
+        val baseDir = absStr.stripSuffix(relStr)
+        java.nio.file.Paths.get(baseDir).toUri.toURL
+      }.toArray
+      val classLoader = new java.net.URLClassLoader(classesBaseUrls, getClass.getClassLoader)
+
       // Group classfiles (detect companion pairs)
       LazyValAnalyzer.group(classfileMap).flatMap { groups =>
         // Validate that we can detect versions for all groups (no Unknown or MixedVersions in tests)
@@ -194,7 +204,7 @@ class BytecodePatchingTests extends FunSuite with ExampleLoader {
 
           groups.foreach { group =>
             if (error.isEmpty) {
-              BytecodePatcher.patch(group) match {
+              BytecodePatcher.patch(group, classLoader = Some(classLoader)) match {
                 case BytecodePatcher.PatchResult.PatchedSingle(name, bytes) =>
                   // Write single patched file
                   val patchedPath = writePatchedFile(name, bytes, example, version)

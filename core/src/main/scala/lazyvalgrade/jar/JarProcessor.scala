@@ -49,6 +49,12 @@ object JarProcessor:
       className -> entryPath
     }.toMap
 
+    // Build a classloader that can resolve classes from the JAR
+    val jarClassLoader = new java.net.URLClassLoader(
+      Array(inputJar.toUri.toURL),
+      getClass.getClassLoader
+    )
+
     // Group and patch
     val errors = mutable.ArrayBuffer[String]()
     val patchedBytes = mutable.Map[String, Array[Byte]]() // keyed by entry path
@@ -60,7 +66,7 @@ object JarProcessor:
       case Right(groups) =>
         for group <- groups do
           try
-            BytecodePatcher.patch(group) match
+            BytecodePatcher.patch(group, classLoader = Some(jarClassLoader)) match
               case BytecodePatcher.PatchResult.PatchedSingle(name, bytes) =>
                 nameToEntryPath.get(name).foreach(ep => patchedBytes(ep) = bytes)
 

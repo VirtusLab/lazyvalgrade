@@ -298,6 +298,12 @@ class ExampleRunner(
       (className, bytes)
     }.toMap
 
+    // Build a classloader that can resolve classes from the compiled directory
+    val compiledClassLoader = new java.net.URLClassLoader(
+      Array(compiledDir.toNIO.toUri.toURL),
+      getClass.getClassLoader
+    )
+
     // Group classfiles (detect companion pairs)
     LazyValAnalyzer.group(classfileMap).flatMap { groups =>
       // Validate that we can detect versions for all groups
@@ -327,7 +333,7 @@ class ExampleRunner(
 
         groups.foreach { group =>
           if (error.isEmpty) {
-            BytecodePatcher.patch(group) match {
+            BytecodePatcher.patch(group, classLoader = Some(compiledClassLoader)) match {
               case BytecodePatcher.PatchResult.PatchedSingle(name, bytes) =>
                 // Write single patched file
                 val patchedPath = writePatchedFile(name, bytes, patchedDir)

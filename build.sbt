@@ -96,13 +96,18 @@ lazy val agent = project
       // Build full classpath: CLI jar + all dependency JARs so ASM can resolve class hierarchies
       val fullCp = (cliJar +: depJars).map(_.getAbsolutePath).mkString(java.io.File.pathSeparator)
 
+      val debugAssembly = sys.env.contains("DEBUG_AGENT_ASSEMBLY")
+      val processLogger: scala.sys.process.ProcessLogger = if (debugAssembly)
+        scala.sys.process.ProcessLogger(s => log.info(s), s => log.error(s))
+      else scala.sys.process.ProcessLogger(_ => (), _ => ())
+
       val processedFiles = depJars.map { depJar =>
         val dest = processedDir / depJar.getName
         IO.copyFile(depJar, dest)
-        log.info(s"Processing ${depJar.getName}...")
+        if (debugAssembly) log.info(s"Processing ${depJar.getName}...")
         val exitCode = scala.sys.process.Process(
           Seq("java", "-cp", fullCp, "lazyvalgrade.cli.Main", dest.getAbsolutePath)
-        ).!(log)
+        ).!(processLogger)
         if (exitCode != 0) {
           throw new MessageOnlyException(s"Failed to process ${depJar.getName} (exit code $exitCode)")
         }

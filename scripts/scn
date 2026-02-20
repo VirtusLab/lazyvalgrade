@@ -23,9 +23,10 @@ if [[ -z "$SCALA_CLI_JAR" ]]; then
   exit 1
 fi
 
+export JAVA_TOOL_OPTIONS="-javaagent:$LAZYVALGRADE_AGENT"
+
 exec java \
   "-javaagent:$LAZYVALGRADE_AGENT" \
   -cp "$SCALA_CLI_JAR" \
   scala.cli.ScalaCli \
-  --java-opt "-javaagent:$LAZYVALGRADE_AGENT" \
   "$@"

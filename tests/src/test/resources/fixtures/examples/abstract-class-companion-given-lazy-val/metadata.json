@@ -1,0 +1,24 @@
+{
+  "description": "Abstract class with companion object containing lazy given instances and inner class extending the abstract class",
+  "mainClassName": "main",
+  "expectedClasses": [
+    {
+      "className": "Parser$",
+      "lazyVals": [
+        {
+          "name": "given_Parser_String",
+          "index": 1
+        },
+        {
+          "name": "given_Parser_Int",
+          "index": 1
+        },
+        {
+          "name": "given_Parser_Boolean",
+          "index": 1
+        }
+      ]
+    }
+  ],
+  "expectedOutput": "hello,42,true,4"
+}

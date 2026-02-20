@@ -92,8 +92,14 @@ object Main {
     println(fansi.Color.Cyan(s"Grouped into ${groups.size} classfile group(s)"))
     println()
 
+    // Build a classloader that can resolve classes from the target directory
+    val classLoader = new java.net.URLClassLoader(
+      Array(targetDir.toNIO.toUri.toURL),
+      getClass.getClassLoader
+    )
+
     // Process each group
-    val results = groups.map(processGroup(_, targetDir))
+    val results = groups.map(processGroup(_, targetDir, classLoader))
 
     // Print summary
     println()
@@ -154,12 +160,12 @@ object Main {
   }
 
   /** Processes a classfile group */
-  private def processGroup(group: ClassfileGroup, targetDir: os.Path): (String, PatchGroupResult) = {
+  private def processGroup(group: ClassfileGroup, targetDir: os.Path, classLoader: ClassLoader): (String, PatchGroupResult) = {
     val groupName = group.primaryName
     print(fansi.Color.Cyan(s"Processing: $groupName ... "))
 
     Try {
-      BytecodePatcher.patch(group) match {
+      BytecodePatcher.patch(group, classLoader = Some(classLoader)) match {
         case BytecodePatcher.PatchResult.PatchedSingle(name, bytes) =>
           // Write back single file
           val filePath = targetDir / s"${name.replace('.', '/')}.class"
