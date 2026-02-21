@@ -99,12 +99,11 @@ find .out -name "*.javap.txt" | wc -l
 
 ## Testing
 
-```bash
-# Run all tests
-sbt test
+**IMPORTANT: Never run `sbt test` directly.** The full test suite is extremely slow (compiles examples across 10+ Scala versions). Instead, always use `SELECT_EXAMPLE` and/or `ONLY_SCALA_VERSIONS` to narrow down tests. When you need to verify the full suite passes, ask the user to run it themselves.
 
-# Run specific test suite
-sbt "tests/testOnly lazyvalgrade.LazyValDetectionTests"
+```bash
+# Run specific test suite with filtering (preferred)
+SELECT_EXAMPLE=simple-lazy-val sbt "tests/testOnly lazyvalgrade.LazyValDetectionTests"
 
 # Run specific test
 sbt "tests/testOnly lazyvalgrade.LazyValDetectionTests -- *companion-object-lazy-val*"
@@ -221,6 +220,12 @@ To enable verbose output for debugging, override in specific test suites:
 ```scala
 override val quietTests: Boolean = false  // Enable verbose output
 ```
+
+### Error Handling: Hard-fail on Unknown Detection
+
+`ScalaVersion.Unknown(reason: String)` carries a diagnostic reason explaining which detection heuristic failed. When the agent encounters an `Unknown` lazy val (or `MixedVersions`), it throws `LazyValPatchingException` with a full diagnostic dump (class fields, methods, per-lazy-val breakdown) instead of silently skipping. This ensures broken Unsafe-based lazy vals don't silently cause `VerifyError` at runtime on newer JDKs.
+
+New test fixtures should be added for any class that triggers `Unknown` detection — the diagnostic output is designed to provide all the info needed to reproduce the case.
 
 ### Known Issues
 

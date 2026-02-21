@@ -1360,6 +1360,85 @@ Based on detailed bytecode analysis of the `class-lazy-val` example:
      - 3.5.2 ≡ 3.7.3: Identical TASTY hash
    - **3.8.0+:** VarHandle-based (same structure as 3.3+, different synchronization primitive)
 
+## False Positive `$lzy` Fields: Sealed Hierarchy Singleton Storage
+
+### Problem
+
+The Scala 3 compiler reuses the `$lzy<N>` naming convention for fields that are **not** lazy vals. This occurs in companion objects of sealed hierarchies (sealed traits, sealed abstract classes, enums) where **companion objects of case classes** are stored as `<Name>$lzy1` fields but initialized **eagerly** in the constructor. Note: actual `case object` instances use **real** lazy val infrastructure (bitmap/OFFSET/volatile depending on version) — the false positives only arise for companion objects of case classes with parameters.
+
+These fields match the `$lzy` storage field regex but have none of the lazy val infrastructure (no OFFSET, no bitmap, no VarHandle, no `$lzyINIT` method, not volatile). The detector must not treat them as lazy vals.
+
+### Example: `case-app` library
+
+**Source (simplified):**
+```scala
+abstract class ParserCompanion[T]:
+  sealed abstract class Step(val index: Int)
+  object Step:
+    case class DoubleDash(override val index: Int) extends Step(index)
+    case class IgnoredUnrecognized(override val index: Int) extends Step(index)
+    // ... more case classes
+```
+
+**Bytecode of `ParserCompanion$Step$` (the inner companion object):**
+
+Fields:
+```java
+public final caseapp.core.parser.ParserCompanion$Step$DoubleDash$ DoubleDash$lzy1;
+    descriptor: Lcaseapp/core/parser/ParserCompanion$Step$DoubleDash$;
+    flags: (0x0011) ACC_PUBLIC, ACC_FINAL
+
+public final caseapp.core.parser.ParserCompanion$Step$IgnoredUnrecognized$ IgnoredUnrecognized$lzy1;
+    descriptor: Lcaseapp/core/parser/ParserCompanion$Step$IgnoredUnrecognized$;
+    flags: (0x0011) ACC_PUBLIC, ACC_FINAL
+```
+
+Constructor (`<init>`):
+```bytecode
+21: aload_0
+22: new           #41   // class ParserCompanion$Step$DoubleDash$
+25: dup
+26: aload_0
+27: invokespecial #44   // Method DoubleDash$."<init>":(LParserCompanion$Step$;)V
+30: putfield      #46   // Field DoubleDash$lzy1:LParserCompanion$Step$DoubleDash$;
+```
+
+Accessor methods (trivial `getfield`):
+```bytecode
+public final DoubleDash$()
+  0: aload_0
+  1: getfield      #46   // Field DoubleDash$lzy1
+  4: areturn
+```
+
+**Key observation:** The actual lazy val is `Step$lzy1` in the **outer** `ParserCompanion` class, which uses the standard 3.3-3.7 OFFSET + `objCAS` pattern to lazily initialize the `Step$` companion object itself. The `Step$` instance then eagerly initializes all its nested case object companions in its own constructor.
+
+### Distinguishing Characteristics
+
+| Characteristic | False Positive (`$lzy` singleton storage) | Real Lazy Val (3.0-3.2) | Real Lazy Val (3.3-3.7) | Real Lazy Val (3.8+) |
+|---|---|---|---|---|
+| **Volatile** | No | No | Yes | Yes |
+| **Descriptor** | Typed (e.g., `LFoo$Bar$;`) | Typed (e.g., `Ljava/lang/String;`) | `Ljava/lang/Object;` | `Ljava/lang/Object;` |
+| **Access flags** | `ACC_PUBLIC + ACC_FINAL` (0x11) | `ACC_PUBLIC + ACC_FINAL` (0x11) | `ACC_PRIVATE + ACC_VOLATILE` (0x42) | `ACC_PRIVATE + ACC_VOLATILE` (0x42) |
+| **OFFSET field** | None | Yes | Yes | No |
+| **Bitmap field** | None | Yes | No | No |
+| **VarHandle field** | None | No | No | Yes |
+| **`$lzyINIT` method** | None | No (inline in accessor) | Yes | Yes |
+| **Initialization** | `new` + `putfield` in `<init>` | CAS in accessor | CAS in `$lzyINIT` | CAS in `$lzyINIT` |
+
+### Detection Rule
+
+A `$lzy<N>` field is a **false positive** (not a lazy val) when ALL of the following are true:
+1. No associated OFFSET field (`OFFSET$<N>` or `OFFSET$_m_<N>`)
+2. No associated bitmap field (`<N>bitmap$<M>`)
+3. No associated VarHandle field (`<name>$lzy<N>$lzyHandle`)
+4. No associated `$lzyINIT` method (`<name>$lzyINIT<N>`)
+5. Field is not volatile
+
+When all five conditions hold, there is **zero evidence** of any thread-safe lazy initialization machinery. The field should be excluded from lazy val detection entirely.
+
+**Safety argument:** A real Unsafe-based lazy val (3.3-3.7) always has an OFFSET field AND is volatile AND has a `$lzyINIT` method. A real bitmap-based lazy val (3.0-3.2) always has a bitmap field AND an OFFSET field. A real VarHandle-based lazy val (3.8+) always has a VarHandle field AND is volatile. No real lazy val pattern has zero infrastructure.
+
 ## Open Questions
 
 1. ✅ **Version stability confirmed** (see Bytecode Stability section above)

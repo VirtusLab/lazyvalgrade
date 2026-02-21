@@ -119,7 +119,14 @@ object BytecodePatcher {
       // Also detect lazy vals in companion class (standalone detection)
       val classDetectionResult = LazyValDetector.detect(classInfo, None)
 
-      // Determine if we need to patch
+      // Determine if we need to patch.
+      //
+      // A companion pair from a single Scala compiler can only have:
+      //   1. One side with no lazy vals, the other with some version
+      //   2. Both sides with the exact same version
+      // Anything else is a bug in detection. After validating this invariant,
+      // skip if the version is already Scala38Plus (genuine or already-patched bytes
+      // fed back by a chained ClassFileTransformer).
       val (objectLazyVals, classLazyVals, version) = (objectDetectionResult, classDetectionResult) match {
         case (LazyValDetectionResult.NoLazyVals, LazyValDetectionResult.NoLazyVals) =>
           return PatchResult.NotApplicable
@@ -128,9 +135,29 @@ object BytecodePatcher {
         case (LazyValDetectionResult.NoLazyVals, LazyValDetectionResult.LazyValsFound(clsLvs, clsVer)) =>
           (Seq.empty, clsLvs, clsVer)
         case (LazyValDetectionResult.LazyValsFound(objLvs, objVer), LazyValDetectionResult.LazyValsFound(clsLvs, clsVer)) =>
-          // Both have lazy vals - versions must match
+          // Both have lazy vals — versions MUST match. A mismatch is always a bug.
           if (objVer != clsVer) {
-            return PatchResult.Failed(s"Companion class and object have different Scala versions: $clsVer vs $objVer")
+            val diag = new StringBuilder
+            diag.append(s"BUG: Companion class and object have different Scala versions: $clsVer vs $objVer\n")
+            diag.append(s"\n--- Companion object: $companionObjectName (detected as $objVer) ---\n")
+            diag.append(s"  Fields:\n")
+            companionObjectInfo.fields.foreach { f =>
+              diag.append(s"    ${f.name}:${f.descriptor} (access=0x${f.access.toHexString})\n")
+            }
+            diag.append(s"  Lazy vals (${objLvs.size}):\n")
+            objLvs.foreach { lv =>
+              diag.append(s"    ${lv.name} (index=${lv.index}, version=${lv.version}, offset=${lv.offsetField.map(_.name)}, varHandle=${lv.varHandleField.map(_.name)}, bitmap=${lv.bitmapField.map(_.name)}, init=${lv.initMethod.map(_.name)})\n")
+            }
+            diag.append(s"\n--- Companion class: $className (detected as $clsVer) ---\n")
+            diag.append(s"  Fields:\n")
+            classInfo.fields.foreach { f =>
+              diag.append(s"    ${f.name}:${f.descriptor} (access=0x${f.access.toHexString})\n")
+            }
+            diag.append(s"  Lazy vals (${clsLvs.size}):\n")
+            clsLvs.foreach { lv =>
+              diag.append(s"    ${lv.name} (index=${lv.index}, version=${lv.version}, offset=${lv.offsetField.map(_.name)}, varHandle=${lv.varHandleField.map(_.name)}, bitmap=${lv.bitmapField.map(_.name)}, init=${lv.initMethod.map(_.name)})\n")
+            }
+            return PatchResult.Failed(diag.toString())
           }
           (objLvs, clsLvs, objVer)
         case (LazyValDetectionResult.MixedVersions(lvs), _) =>
@@ -139,6 +166,11 @@ object BytecodePatcher {
         case (_, LazyValDetectionResult.MixedVersions(lvs)) =>
           val allLvs = (objectDetectionResult match { case LazyValDetectionResult.LazyValsFound(l, _) => l; case _ => Seq.empty }) ++ lvs
           return PatchResult.Failed(buildDiagnostic("Mixed Scala versions detected in companion class", className, classInfo, allLvs))
+      }
+
+      // Already in target format — nothing to patch
+      if (version == ScalaVersion.Scala38Plus) {
+        return PatchResult.NotApplicable
       }
 
       // Dispatch to version-specific patching based on what we found

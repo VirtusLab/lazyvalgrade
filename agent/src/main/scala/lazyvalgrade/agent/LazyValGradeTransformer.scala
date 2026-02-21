@@ -32,9 +32,6 @@ class LazyValGradeTransformer(config: AgentConfig) extends ClassFileTransformer 
     */
   private val patchedCompanionBuffer = new ConcurrentHashMap[String, Array[Byte]]()
 
-  private def debug(msg: => String): Unit =
-    if (config.debug) scribe.debug(msg)
-
   override def transform(
       loader: ClassLoader,
       className: String,
@@ -51,33 +48,29 @@ class LazyValGradeTransformer(config: AgentConfig) extends ClassFileTransformer 
 
     val dotName = className.replace('/', '.')
 
-    if (config.debug) System.err.println(s"[lazyvalgrade-debug] transform($dotName) ENTER")
+    scribe.debug(s"transform($dotName): ENTER (${classfileBuffer.length} bytes)")
 
     // Check if companion already patched this class
     val buffered = patchedCompanionBuffer.remove(dotName)
     if (buffered != null) {
-      if (config.debug) System.err.println(s"[lazyvalgrade-debug] transform($dotName) → BUFFERED (${buffered.length} bytes)")
-      debug(s"transform($dotName): returning buffered companion bytes (${buffered.length} bytes)")
-      if (config.verbose) {
-        System.err.println(s"[lazyvalgrade] Patched (buffered): $dotName")
-      }
+      scribe.info(s"PATCHED: $dotName (buffered, ${buffered.length} bytes)")
       return buffered
     }
 
     // Quick field scan: only proceed if class has $lzy or OFFSET$ fields
     val relevant = hasRelevantFields(classfileBuffer)
     if (!relevant) {
-      debug(s"transform($dotName): no relevant fields, skipping")
+      scribe.debug(s"transform($dotName): no relevant fields, skipping")
       return null
     }
 
     // Null loader means bootstrap classloader — already filtered by skipPrefixes
     if (loader == null) {
-      debug(s"transform($dotName): null loader, skipping")
+      scribe.debug(s"transform($dotName): null loader, skipping")
       return null
     }
 
-    debug(s"transform($dotName): has relevant fields, attempting patch (loader=${loader.getClass.getName})")
+    scribe.debug(s"transform($dotName): has relevant fields, attempting patch (loader=${loader.getClass.getName})")
 
     try {
       // Compute companion name: Foo$ <-> Foo
@@ -93,16 +86,16 @@ class LazyValGradeTransformer(config: AgentConfig) extends ClassFileTransformer 
           if (stream != null) {
             try {
               val bytes = Some(stream.readAllBytes())
-              debug(s"  companion $companionDotName: found (${bytes.get.length} bytes)")
+              scribe.debug(s"  companion $companionDotName: found (${bytes.get.length} bytes)")
               bytes
             } finally stream.close()
           } else {
-            debug(s"  companion $companionDotName: not found (getResourceAsStream returned null)")
+            scribe.debug(s"  companion $companionDotName: not found (getResourceAsStream returned null)")
             None
           }
         } catch {
           case t: Throwable =>
-            debug(s"  companion $companionDotName: error reading: ${t.getMessage}")
+            scribe.debug(s"  companion $companionDotName: error reading: ${t.getMessage}")
             None
         }
 
@@ -112,63 +105,46 @@ class LazyValGradeTransformer(config: AgentConfig) extends ClassFileTransformer 
         case None        => Map(dotName -> classfileBuffer)
       }
 
-      debug(s"  classfileMap keys: ${classfileMap.keys.mkString(", ")}")
+      scribe.debug(s"  classfileMap keys: ${classfileMap.keys.mkString(", ")}")
 
       // Group and patch
       LazyValAnalyzer.group(classfileMap) match {
         case Left(error) =>
-          debug(s"  group() failed: $error")
-          if (config.verbose) {
-            System.err.println(s"[lazyvalgrade] Failed to group $dotName: $error")
-          }
+          scribe.warn(s"Failed to group $dotName: $error")
           null
 
         case Right(groups) =>
-          debug(s"  group() returned ${groups.size} group(s): ${groups.map(g => s"${g.getClass.getSimpleName}(${g.primaryName})").mkString(", ")}")
+          scribe.debug(s"  group() returned ${groups.size} group(s): ${groups.map(g => s"${g.getClass.getSimpleName}(${g.primaryName})").mkString(", ")}")
 
           // There should be exactly one group (single or companion pair)
           groups.headOption.map(BytecodePatcher.patch(_, classLoader = Some(loader))) match {
             case Some(BytecodePatcher.PatchResult.PatchedSingle(name, patchedBytes)) =>
-              if (config.debug) System.err.println(s"[lazyvalgrade-debug] transform($dotName) → PatchedSingle($name, ${patchedBytes.length} bytes)")
-              debug(s"  patch() -> PatchedSingle($name, ${patchedBytes.length} bytes)")
-              if (config.debug) dumpBytes(name, patchedBytes)
-              if (config.verbose) {
-                System.err.println(s"[lazyvalgrade] Patched: $dotName")
-              }
+              scribe.info(s"PATCHED: $dotName (single, ${patchedBytes.length} bytes)")
+              dumpBytes(name, patchedBytes)
               patchedBytes
 
             case Some(BytecodePatcher.PatchResult.PatchedPair(objName, clsName, objBytes, clsBytes)) =>
-              if (config.debug) System.err.println(s"[lazyvalgrade-debug] transform($dotName) → PatchedPair(obj=$objName, cls=$clsName)")
               // Determine which side is the current class and buffer the other
               val (currentBytes, companionName, companionPatchedBytes) =
                 if (dotName == objName) (objBytes, clsName, clsBytes)
                 else (clsBytes, objName, objBytes)
 
               patchedCompanionBuffer.put(companionName, companionPatchedBytes)
-
-              debug(s"  patch() -> PatchedPair(obj=$objName ${objBytes.length}b, cls=$clsName ${clsBytes.length}b)")
-              debug(s"  returning ${currentBytes.length} bytes for $dotName, buffered ${companionPatchedBytes.length} bytes for $companionName")
-              if (config.debug) {
-                dumpBytes(objName, objBytes)
-                dumpBytes(clsName, clsBytes)
-              }
-              if (config.verbose) {
-                System.err.println(s"[lazyvalgrade] Patched pair: $dotName (buffered companion: $companionName)")
-              }
+              scribe.info(s"PATCHED: $dotName (pair, buffered=$companionName)")
+              dumpBytes(objName, objBytes)
+              dumpBytes(clsName, clsBytes)
               currentBytes
 
             case Some(BytecodePatcher.PatchResult.NotApplicable) =>
-              if (config.debug) System.err.println(s"[lazyvalgrade-debug] transform($dotName) → NotApplicable")
-              debug(s"  patch() -> NotApplicable")
+              scribe.debug(s"  patch() -> NotApplicable")
               null
 
             case Some(BytecodePatcher.PatchResult.Failed(error)) =>
-              val msg = s"[lazyvalgrade] FATAL: Failed to patch $dotName:\n$error"
-              System.err.println(msg)
-              throw new lazyvalgrade.patching.LazyValPatchingException(msg)
+              scribe.error(s"FATAL: Failed to patch $dotName:\n$error")
+              throw new lazyvalgrade.patching.LazyValPatchingException(s"Failed to patch $dotName:\n$error")
 
             case None =>
-              debug(s"  no groups to patch")
+              scribe.debug(s"  no groups to patch")
               null
           }
       }
@@ -177,35 +153,35 @@ class LazyValGradeTransformer(config: AgentConfig) extends ClassFileTransformer 
         // Re-throw diagnostic exceptions — the class must not load with broken bytecode
         throw t
       case t: Throwable =>
-        if (config.debug) System.err.println(s"[lazyvalgrade-debug] transform($dotName) → EXCEPTION: ${t.getClass.getName}: ${t.getMessage}")
-        debug(s"  EXCEPTION in transform($dotName): ${t.getClass.getName}: ${t.getMessage}")
-        if (config.debug) {
+        scribe.error(s"EXCEPTION in transform($dotName): ${t.getClass.getName}: ${t.getMessage}")
+        scribe.debug {
           val sw = new java.io.StringWriter()
           t.printStackTrace(new java.io.PrintWriter(sw))
-          debug(s"  stack trace:\n$sw")
+          s"  stack trace:\n$sw"
         }
         // Never throw from a ClassFileTransformer — return null to leave class unchanged
         null
     }
   }
 
-  /** Dump patched bytes to /tmp for post-mortem inspection. */
+  /** Dump patched bytes to /tmp for post-mortem inspection (only at trace level). */
   private def dumpBytes(name: String, bytes: Array[Byte]): Unit = {
-    try {
-      val pid = ProcessHandle.current().pid()
-      val safeName = name.replace('.', '_').replace('$', '_')
-      val path = java.nio.file.Paths.get(s"/tmp/lazyvalgrade-dump-$pid-$safeName.class")
-      java.nio.file.Files.write(path, bytes)
-      debug(s"  dumped ${bytes.length} bytes to $path")
-    } catch {
-      case t: Throwable => debug(s"  failed to dump bytes: ${t.getMessage}")
+    if (config.logLevel.value <= scribe.Level.Trace.value) {
+      try {
+        val pid = ProcessHandle.current().pid()
+        val safeName = name.replace('.', '_').replace('$', '_')
+        val path = java.nio.file.Paths.get(s"/tmp/lazyvalgrade-dump-$pid-$safeName.class")
+        java.nio.file.Files.write(path, bytes)
+        scribe.trace(s"  dumped ${bytes.length} bytes to $path")
+      } catch {
+        case t: Throwable => scribe.trace(s"  failed to dump bytes: ${t.getMessage}")
+      }
     }
   }
 
   /** Quick check for relevant fields using ASM with SKIP_CODE | SKIP_DEBUG. */
   private def hasRelevantFields(bytes: Array[Byte]): Boolean = {
     var found = false
-    val fields = scala.collection.mutable.ArrayBuffer[String]()
     try {
       val reader = new ClassReader(bytes)
       reader.accept(
@@ -217,7 +193,6 @@ class LazyValGradeTransformer(config: AgentConfig) extends ClassFileTransformer 
               signature: String,
               value: Any
           ): FieldVisitor = {
-            if (config.debug) fields += s"$name:$descriptor"
             if (!found) {
               if (name.contains("$lzy") && !name.contains("$lzyHandle")) {
                 found = true
@@ -232,9 +207,6 @@ class LazyValGradeTransformer(config: AgentConfig) extends ClassFileTransformer 
       )
     } catch {
       case _: Throwable => // Malformed classfile — skip
-    }
-    if (config.debug && found) {
-      debug(s"  hasRelevantFields: true, fields=[${fields.mkString(", ")}]")
     }
     found
   }

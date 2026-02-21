@@ -83,7 +83,7 @@ lazy val agent = project
     version := "0.1.0-SNAPSHOT",
     scalaVersion := "3.8.1",
     libraryDependencies ++= Seq(
-      "com.outr" %% "scribe-file" % "3.15.0"
+      "com.outr" %% "scribe" % "3.15.0"
     ),
     processDeps := {
       val log = streams.value.log
@@ -136,7 +136,10 @@ lazy val agent = project
       ShadeRule.rename("scribe.**" -> "lazyvalgrade.shaded.scribe.@1").inAll,
       ShadeRule.rename("perfolation.**" -> "lazyvalgrade.shaded.perfolation.@1").inAll,
       ShadeRule.rename("moduload.**" -> "lazyvalgrade.shaded.moduload.@1").inAll,
-      ShadeRule.rename("com.lihaoyi.**" -> "lazyvalgrade.shaded.lihaoyi.@1").inAll
+      ShadeRule.rename("sourcecode.**" -> "lazyvalgrade.shaded.sourcecode.@1").inAll,
+      ShadeRule.rename("com.lihaoyi.**" -> "lazyvalgrade.shaded.lihaoyi.@1").inAll,
+      ShadeRule.rename("os.**" -> "lazyvalgrade.shaded.os.@1").inAll,
+      ShadeRule.rename("geny.**" -> "lazyvalgrade.shaded.geny.@1").inAll
     ),
     assembly / packageOptions += Package.ManifestAttributes(
       "Premain-Class" -> "lazyvalgrade.agent.LazyValGradeAgent",

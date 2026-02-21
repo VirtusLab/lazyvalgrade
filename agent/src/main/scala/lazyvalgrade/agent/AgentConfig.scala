@@ -4,16 +4,15 @@ package lazyvalgrade.agent
   *
   * Parsed from the agent arguments string (comma-separated key=value pairs).
   *
-  * @param verbose
-  *   Log patched classes to stderr
+  * @param logLevel
+  *   Scribe log level for agent output (default: Warn)
   * @param includes
   *   Only transform classes matching these package prefixes (dot-separated)
   * @param excludes
   *   Skip classes matching these package prefixes (dot-separated)
   */
 final case class AgentConfig(
-    verbose: Boolean = false,
-    debug: Boolean = false,
+    logLevel: scribe.Level = scribe.Level.Warn,
     includes: Seq[String] = Seq.empty,
     excludes: Seq[String] = Seq.empty
 ) {
@@ -37,21 +36,25 @@ object AgentConfig {
     *
     * Format: comma-separated options, e.g.:
     *   "verbose,include=com.example.,exclude=com.example.internal."
+    *
+    * Log level options (each sets the scribe log level):
+    *   - verbose: Debug level
+    *   - trace: Trace level
+    *   (default is Warn if none specified)
     */
   def parse(agentArgs: String): AgentConfig = {
     if (agentArgs == null || agentArgs.trim.isEmpty) return AgentConfig()
 
     val parts = agentArgs.split(',').map(_.trim).filter(_.nonEmpty)
-    var verbose = false
-    var debug = false
+    var logLevel: scribe.Level = scribe.Level.Warn
     val includes = scala.collection.mutable.ArrayBuffer[String]()
     val excludes = scala.collection.mutable.ArrayBuffer[String]()
 
     parts.foreach { part =>
       if (part == "verbose") {
-        verbose = true
-      } else if (part == "debug") {
-        debug = true
+        logLevel = scribe.Level.Debug
+      } else if (part == "trace") {
+        logLevel = scribe.Level.Trace
       } else if (part.startsWith("include=")) {
         includes += part.stripPrefix("include=")
       } else if (part.startsWith("exclude=")) {
@@ -59,6 +62,6 @@ object AgentConfig {
       }
     }
 
-    AgentConfig(verbose, debug, includes.toSeq, excludes.toSeq)
+    AgentConfig(logLevel, includes.toSeq, excludes.toSeq)
   }
 }

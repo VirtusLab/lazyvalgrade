@@ -10,43 +10,40 @@ import java.lang.instrument.Instrumentation
   * Usage: java -javaagent:lazyvalgrade-agent.jar[=options] -jar app.jar
   *
   * Options (comma-separated):
-  *   - verbose: Log patched classes to stderr
-  *   - debug: Enable detailed file logging to /tmp/lazyvalgrade-agent-<pid>.log
+  *   - verbose: Log patched classes and internals to stderr (Debug level)
+  *   - trace: Log everything including byte dumps to stderr (Trace level)
   *   - include=com.example.: Only transform matching packages
   *   - exclude=com.example.internal.: Skip matching packages
   */
 object LazyValGradeAgent {
 
+  private val instanceCounter = new java.util.concurrent.atomic.AtomicInteger(0)
+
   def premain(agentArgs: String, inst: Instrumentation): Unit = {
+    val count = instanceCounter.incrementAndGet()
+    if (count > 1) {
+      val msg = s"[lazyvalgrade] FATAL: premain called $count times — agent loaded more than once. " +
+        "This usually means -javaagent is specified alongside JAVA_TOOL_OPTIONS containing the same agent. Remove one."
+      System.err.println(msg)
+      throw new RuntimeException(msg)
+    }
+
     val config = AgentConfig.parse(agentArgs)
 
-    if (config.debug) {
-      // Debug mode: log everything to file
-      import scribe._
-      import scribe.file._
-
-      Logger.root
-        .clearHandlers()
-        .clearModifiers()
-        .withHandler(
-          writer = FileWriter(PathBuilder.static(java.nio.file.Paths.get(s"/tmp/lazyvalgrade-agent-${ProcessHandle.current().pid()}.log"))),
-          minimumLevel = Some(Level.Trace)
-        )
-        .replace()
-    } else {
-      // Normal mode: suppress all scribe logging to avoid polluting host app stdout
-      scribe.Logger.root
-        .clearHandlers()
-        .clearModifiers()
-        .withHandler(minimumLevel = Some(scribe.Level.Error))
-        .replace()
-    }
+    // Configure scribe: plain single-line format to stderr, level from config
+    scribe.Logger.root
+      .clearHandlers()
+      .clearModifiers()
+      .withHandler(
+        writer = scribe.writer.SystemErrWriter,
+        formatter = scribe.format.Formatter.simple,
+        minimumLevel = Some(config.logLevel)
+      )
+      .replace()
 
     val transformer = new LazyValGradeTransformer(config)
     inst.addTransformer(transformer)
 
-    if (config.verbose) {
-      System.err.println("[lazyvalgrade] Agent installed")
-    }
+    scribe.info("[lazyvalgrade] Agent installed")
   }
 }
