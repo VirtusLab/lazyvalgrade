@@ -131,6 +131,7 @@ lazy val agent = project
       case x => MergeStrategy.first
     },
     assembly / assemblyShadeRules := Seq(
+      ShadeRule.rename("lazyvalgrade.**" -> "lazyvalgrade.shaded.agent.@0").inAll,
       ShadeRule.rename("scala.**" -> "lazyvalgrade.shaded.scala.@1").inAll,
       ShadeRule.rename("org.objectweb.asm.**" -> "lazyvalgrade.shaded.asm.@1").inAll,
       ShadeRule.rename("scribe.**" -> "lazyvalgrade.shaded.scribe.@1").inAll,
@@ -142,7 +143,7 @@ lazy val agent = project
       ShadeRule.rename("geny.**" -> "lazyvalgrade.shaded.geny.@1").inAll
     ),
     assembly / packageOptions += Package.ManifestAttributes(
-      "Premain-Class" -> "lazyvalgrade.agent.LazyValGradeAgent",
+      "Premain-Class" -> "lazyvalgrade.shaded.agent.lazyvalgrade.agent.LazyValGradeAgent",
       "Can-Retransform-Classes" -> "false",
       "Can-Redefine-Classes" -> "false"
     )

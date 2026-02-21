@@ -18,13 +18,14 @@ import lazyvalgrade.patching.BytecodePatcher
 class LazyValGradeTransformer(config: AgentConfig) extends ClassFileTransformer {
 
   /** Packages to always skip (JDK internals, our own code, Scala runtime).
-    * NOTE: "scala/runtime/" is constructed via StringBuilder to prevent sbt-assembly
-    * shade rules from rewriting it to "lazyvalgrade/shaded/scala/runtime/".
+    * NOTE: String literals for our own package and scala/runtime/ are constructed
+    * via StringBuilder/Array to prevent sbt-assembly shade rules from rewriting them.
     * The agent receives UNSHADED class names from the JVM.
     */
   private val skipPrefixes = Array(
     "java/", "javax/", "jdk/", "sun/", "com/sun/",
-    "lazyvalgrade/", new StringBuilder("sca").append("la/runtime/").toString
+    new StringBuilder("lazy").append("valgrade/").toString,
+    new StringBuilder("sca").append("la/runtime/").toString
   )
 
   /** Buffer for patched companion bytes. When one side of a companion pair is patched,
@@ -170,7 +171,8 @@ class LazyValGradeTransformer(config: AgentConfig) extends ClassFileTransformer 
       try {
         val pid = ProcessHandle.current().pid()
         val safeName = name.replace('.', '_').replace('$', '_')
-        val path = java.nio.file.Paths.get(s"/tmp/lazyvalgrade-dump-$pid-$safeName.class")
+        val dumpPrefix = new StringBuilder("lazy").append("valgrade").toString
+        val path = java.nio.file.Paths.get(s"/tmp/$dumpPrefix-dump-$pid-$safeName.class")
         java.nio.file.Files.write(path, bytes)
         scribe.trace(s"  dumped ${bytes.length} bytes to $path")
       } catch {

@@ -17,12 +17,15 @@ import java.lang.instrument.Instrumentation
   */
 object LazyValGradeAgent {
 
+  /** Log prefix constructed to survive sbt-assembly shade rules. */
+  val logPrefix: String = Array("[lazy", "val", "grade]").mkString
+
   private val instanceCounter = new java.util.concurrent.atomic.AtomicInteger(0)
 
   def premain(agentArgs: String, inst: Instrumentation): Unit = {
     val count = instanceCounter.incrementAndGet()
     if (count > 1) {
-      val msg = s"[lazyvalgrade] FATAL: premain called $count times — agent loaded more than once. " +
+      val msg = s"$logPrefix FATAL: premain called $count times — agent loaded more than once. " +
         "This usually means -javaagent is specified alongside JAVA_TOOL_OPTIONS containing the same agent. Remove one."
       System.err.println(msg)
       throw new RuntimeException(msg)
@@ -44,6 +47,6 @@ object LazyValGradeAgent {
     val transformer = new LazyValGradeTransformer(config)
     inst.addTransformer(transformer)
 
-    scribe.info("[lazyvalgrade] Agent installed")
+    scribe.info(s"$logPrefix Agent installed")
   }
 }
