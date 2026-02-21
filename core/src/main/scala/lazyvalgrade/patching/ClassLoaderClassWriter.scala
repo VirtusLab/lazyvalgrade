@@ -10,24 +10,57 @@ import org.objectweb.asm.{ClassReader, ClassWriter, Opcodes}
   *
   * This implementation reads class bytecode via getResourceAsStream and parses superclass
   * names with ASM's ClassReader, walking the hierarchy without ever calling loadClass().
+  *
+  * On Java 9+, JDK classes in platform modules (java.base, etc.) may not be accessible via
+  * getResourceAsStream from arbitrary classloaders. For JDK types (java/, javax/, jdk/, sun/),
+  * we fall back to Class.forName() which is safe — these classes are already loaded or are
+  * guaranteed not to contain Scala lazy vals.
   */
 class ClassLoaderClassWriter(classLoader: ClassLoader) extends ClassWriter(ClassWriter.COMPUTE_FRAMES):
 
   private case class ClassInfo(superName: String, interfaces: Array[String], isInterface: Boolean)
 
+  /** JDK package prefixes where Class.forName fallback is safe (no lazy val patching risk). */
+  private val jdkPrefixes = Array("java/", "javax/", "jdk/", "sun/", "com/sun/")
+
   private def readClassInfo(internalName: String): Option[ClassInfo] =
     if internalName == "java/lang/Object" then
       Some(ClassInfo(null, Array.empty, isInterface = false))
     else
-      val resource = classLoader.getResourceAsStream(internalName + ".class")
-      if resource == null then None
-      else
-        try
-          val reader = new ClassReader(resource)
-          val isInterface = (reader.getAccess & Opcodes.ACC_INTERFACE) != 0
-          Some(ClassInfo(reader.getSuperName, reader.getInterfaces, isInterface))
-        catch case _: Throwable => None
-        finally resource.close()
+      readClassInfoFromResource(classLoader, internalName)
+        .orElse {
+          // Try system classloader if different — covers cases where the provided
+          // classloader can't see platform/system classes
+          val sysCl = ClassLoader.getSystemClassLoader
+          if (sysCl ne classLoader) then readClassInfoFromResource(sysCl, internalName) else None
+        }
+        .orElse(readClassInfoViaReflection(internalName))
+
+  private def readClassInfoFromResource(cl: ClassLoader, internalName: String): Option[ClassInfo] =
+    val resource = cl.getResourceAsStream(internalName + ".class")
+    if resource == null then None
+    else
+      try
+        val reader = new ClassReader(resource)
+        val isInterface = (reader.getAccess & Opcodes.ACC_INTERFACE) != 0
+        Some(ClassInfo(reader.getSuperName, reader.getInterfaces, isInterface))
+      catch case _: Throwable => None
+      finally resource.close()
+
+  /** Fallback: use Class.forName for JDK types that can't be found via getResourceAsStream
+    * on Java 9+ (module system). This is safe because JDK classes never contain Scala lazy vals,
+    * so loading them won't trigger unwanted patching.
+    */
+  private def readClassInfoViaReflection(internalName: String): Option[ClassInfo] =
+    if !jdkPrefixes.exists(internalName.startsWith) then None
+    else
+      try
+        val cls = Class.forName(internalName.replace('/', '.'), false, classLoader)
+        val isInterface = cls.isInterface
+        val superName = if cls.getSuperclass != null then cls.getSuperclass.getName.replace('.', '/') else null
+        val interfaces = cls.getInterfaces.map(_.getName.replace('.', '/'))
+        Some(ClassInfo(superName, interfaces, isInterface))
+      catch case _: Throwable => None
 
   private def getSuperClasses(internalName: String): List[String] =
     var result = List(internalName)
