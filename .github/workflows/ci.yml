@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: sbt
+      - uses: sbt/setup-sbt@13c2c27693f0ec4a33b1ebefd04c53c4c0ba618a # v1
+      - name: Compile
+        run: sbt compile
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    needs: build
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: sbt
+      - uses: sbt/setup-sbt@13c2c27693f0ec4a33b1ebefd04c53c4c0ba618a # v1
+      - name: Run tests
+        run: sbt test
+
+  publish:
+    needs: [build, test]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: sbt
+      - uses: sbt/setup-sbt@13c2c27693f0ec4a33b1ebefd04c53c4c0ba618a # v1
+      - name: Publish
+        run: sbt ci-release
+        env:
+          PGP_PASSPHRASE: ${{ secrets.PGP_PASSPHRASE }}
+          PGP_SECRET: ${{ secrets.PGP_SECRET }}
+          SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
+          SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
