@@ -1,8 +1,21 @@
+inThisBuild(List(
+  organization := "org.virtuslab",
+  homepage := Some(url("https://github.com/VirtusLab/lazyvalgrade")),
+  licenses := List("Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0")),
+  developers := List(
+    Developer(
+      "lbialy",
+      "Łukasz Biały",
+      "lbialy@virtuslab.com",
+      url("https://github.com/VirtusLab")
+    )
+  )
+))
+
 lazy val core = project
   .in(file("core"))
   .settings(
     name := "lazyvalgrade-core",
-    version := "0.1.0-SNAPSHOT",
     scalaVersion := "3.8.1",
     libraryDependencies ++= Seq(
       "org.ow2.asm" % "asm" % "9.7",
@@ -18,7 +31,7 @@ lazy val testops = project
   .in(file("testops"))
   .settings(
     name := "lazyvalgrade-testops",
-    version := "0.1.0-SNAPSHOT",
+    publish / skip := true,
     scalaVersion := "3.8.1",
     libraryDependencies ++= Seq(
       "com.outr" %% "scribe" % "3.15.0",
@@ -40,7 +53,7 @@ lazy val tests = project
   .in(file("tests"))
   .settings(
     name := "lazyvalgrade-tests",
-    version := "0.1.0-SNAPSHOT",
+    publish / skip := true,
     scalaVersion := "3.8.1",
     libraryDependencies ++= Seq(
       "org.scalameta" %% "munit" % "1.0.0" % Test,
@@ -57,7 +70,7 @@ lazy val cli = project
   .in(file("cli"))
   .settings(
     name := "lazyvalgrade-cli",
-    version := "0.1.0-SNAPSHOT",
+    publish / skip := true,
     scalaVersion := "3.8.1",
     libraryDependencies ++= Seq(
       "com.lihaoyi" %% "os-lib" % "0.11.3",
@@ -80,8 +93,20 @@ lazy val agent = project
   .in(file("agent"))
   .settings(
     name := "lazyvalgrade-agent",
-    version := "0.1.0-SNAPSHOT",
     scalaVersion := "3.8.1",
+    crossPaths := false,
+    autoScalaLibrary := false,
+    Compile / packageBin := assembly.value,
+    pomPostProcess := { node =>
+      import scala.xml._
+      import scala.xml.transform._
+      new RuleTransformer(new RewriteRule {
+        override def transform(node: Node): Seq[Node] = node match {
+          case e: Elem if e.label == "dependencies" => NodeSeq.Empty
+          case n => n
+        }
+      }).transform(node).head
+    },
     libraryDependencies ++= Seq(
       "com.outr" %% "scribe" % "3.15.0"
     ),
@@ -156,6 +181,7 @@ lazy val root = project
   .in(file("."))
   .settings(
     name := "lazyvalgrade",
+    publish / skip := true,
     scalaVersion := "3.8.1",
     agentInstall := {
       val assembled = (agent / assembly).value

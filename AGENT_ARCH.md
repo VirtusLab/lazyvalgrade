@@ -251,14 +251,15 @@ The textual dump is needed by `extractMethodBytecode`, which finds method bounda
 
 **File:** `build.sbt` (lines 133-143)
 
-The agent shades *all* of its dependencies:
+The agent shades *all* of its dependencies and itself:
 - `scala.**` -- the entire Scala standard library
 - `org.objectweb.asm.**` -- ASM bytecode framework
 - `scribe.**` -- logging library
 - `perfolation.**`, `moduload.**`, `sourcecode.**` -- scribe's transitive dependencies
 - `com.lihaoyi.**`, `os.**`, `geny.**` -- os-lib and its dependencies
+- `lazyvalgrade.**` -- the entire lazyvalgrade itself
 
-This is necessary because the agent runs in the application's JVM and cannot conflict with the application's own versions of these libraries. But it creates the anti-shading problems described in section 2, and is why the self-patching build (section 1) exists.
+This is necessary because the agent runs in the application's JVM and cannot conflict with the application's own versions of these libraries. But it creates the anti-shading problems described in section 2, and is why the self-patching build (section 1) exists. Self-shading of the `lazyvalgrade.**` package is only really necessary for agent to be able to run in its own tests.
 
 ---
 
