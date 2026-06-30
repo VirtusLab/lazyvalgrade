@@ -24,7 +24,31 @@ jobs:
       - name: Compile
         run: sbt compile
 
-  test:
+  # Tests are split by required JVM (see build.sbt). `sbt test` is intentionally disabled; each
+  # leg runs its own target on the JVM it needs.
+  #
+  # tests-jdk9: pure bytecode-analysis suites + the Java-9 runtime proof. Runs on Java 9 to verify
+  # the published (v53) artifacts actually load and execute on the oldest supported JVM.
+  test-jdk9:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    needs: build
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+        with:
+          distribution: zulu
+          java-version: 9
+          cache: sbt
+      - uses: sbt/setup-sbt@13c2c27693f0ec4a33b1ebefd04c53c4c0ba618a # v1
+      - uses: coursier/cache-action@2addd381bd2c931f42d4b734b9d0c9b73aac16fb # v6
+      - uses: VirtusLab/scala-cli-setup@d320e01a605bf27128a5657575382668f83ef34e # v1.14.0
+      - name: Run JDK 9 test suite
+        run: sbt tests-jdk9
+
+  # tests-jdk25: suites that assert presence/absence of the sun.misc.Unsafe warning, which only
+  # newer JDKs emit. Runs on Java 25.
+  test-jdk25:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     needs: build
@@ -33,16 +57,16 @@ jobs:
       - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 25
           cache: sbt
       - uses: sbt/setup-sbt@13c2c27693f0ec4a33b1ebefd04c53c4c0ba618a # v1
       - uses: coursier/cache-action@2addd381bd2c931f42d4b734b9d0c9b73aac16fb # v6
       - uses: VirtusLab/scala-cli-setup@d320e01a605bf27128a5657575382668f83ef34e # v1.14.0
-      - name: Run tests
-        run: sbt test
+      - name: Run JDK 25 test suite
+        run: sbt tests-jdk25
 
   publish:
-    needs: [build, test]
+    needs: [build, test-jdk9, test-jdk25]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:

@@ -109,8 +109,7 @@ class BytecodePatchingTests extends FunSuite with ExampleLoader {
     }
 
     // Agent jar is built automatically by sbt (Test/test dependsOn agent/assembly)
-    agentJarPath = os.pwd / "agent" / "target" / "scala-3.8.1" / "lazyvalgrade-agent.jar"
-    assert(os.exists(agentJarPath), s"Agent jar not found: $agentJarPath (should be built by sbt automatically)")
+    agentJarPath = TestPaths.findAgentJar()
     log(s"✓ Agent jar: $agentJarPath")
   }
 

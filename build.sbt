@@ -16,7 +16,15 @@ lazy val core = project
   .in(file("core"))
   .settings(
     name := "lazyvalgrade-core",
-    scalaVersion := "3.8.1",
+    // Scala 3.3 LTS (not 3.8): 3.8's compiler/stdlib require JDK 17 and cannot emit < v61 bytecode,
+    // so artifacts built with it can't load on Java 9. 3.3.8's stdlib targets Java 8 and runs on 9.
+    scalaVersion := "3.3.8",
+    // Publish bytecode at Java 9 level: VarHandle (the patched lazy-val impl) is a Java 9 API, so
+    // Java 9 is the runtime floor. -release also pins the API surface to Java 9, catching accidental
+    // use of a newer JDK method that would NoSuchMethodError on an old JVM. -Yfuture-lazy-vals opts
+    // into the Unsafe-free (VarHandle) lazy-val scheme that became the default in 3.8, so our own
+    // code/runtime doesn't reintroduce sun.misc.Unsafe after the downgrade from 3.8.
+    scalacOptions ++= Seq("-release", "9", "-Yfuture-lazy-vals"),
     libraryDependencies ++= Seq(
       "org.ow2.asm" % "asm" % "9.7",
       "org.ow2.asm" % "asm-commons" % "9.7",
@@ -32,7 +40,7 @@ lazy val testops = project
   .settings(
     name := "lazyvalgrade-testops",
     publish / skip := true,
-    scalaVersion := "3.8.1",
+    scalaVersion := "3.3.8",
     libraryDependencies ++= Seq(
       "com.outr" %% "scribe" % "3.15.0",
       "com.lihaoyi" %% "os-lib" % "0.11.3",
@@ -49,21 +57,36 @@ lazy val testops = project
   )
   .dependsOn(core)
 
-lazy val tests = project
-  .in(file("tests"))
-  .settings(
-    name := "lazyvalgrade-tests",
-    publish / skip := true,
-    scalaVersion := "3.8.1",
-    libraryDependencies ++= Seq(
-      "org.scalameta" %% "munit" % "1.0.0" % Test,
-      "com.outr" %% "scribe" % "3.15.0",
-      "com.lihaoyi" %% "os-lib" % "0.11.3"
-    ),
-    testFrameworks += new TestFramework("munit.Framework"),
-    Test / test := ((Test / test) dependsOn (agent / assembly)).value,
-    Test / testOnly := ((Test / testOnly) dependsOn (agent / assembly)).evaluated
-  )
+// Shared settings for both test modules. Test sources are split by JDK requirement:
+//   - tests-jdk9  : pure bytecode-analysis suites + a runtime proof that the agent and patched
+//                   bytecode actually run on Java 9. Run with `sbt tests-jdk9` on a Java 9 JVM.
+//   - tests-jdk25 : suites that assert presence/absence of the `sun.misc.Unsafe` warning, which
+//                   only newer JDKs emit. Run with `sbt tests-jdk25` on a Java 24+ JVM.
+// Both reuse the fixtures under tests/src/test/resources and the ExampleLoader in testops.
+val commonTestSettings = Seq(
+  publish / skip := true,
+  scalaVersion := "3.3.8",
+  libraryDependencies ++= Seq(
+    "org.scalameta" %% "munit" % "1.0.0" % Test,
+    "com.outr" %% "scribe" % "3.15.0",
+    "com.lihaoyi" %% "os-lib" % "0.11.3"
+  ),
+  testFrameworks += new TestFramework("munit.Framework"),
+  // The agent jar must be assembled before runtime tests can attach it.
+  Test / test := ((Test / test) dependsOn (agent / assembly)).value,
+  Test / testOnly := ((Test / testOnly) dependsOn (agent / assembly)).evaluated
+)
+
+lazy val testsJdk9 = project
+  .in(file("tests-jdk9"))
+  .settings(name := "lazyvalgrade-tests-jdk9")
+  .settings(commonTestSettings)
+  .dependsOn(core, testops, agent)
+
+lazy val testsJdk25 = project
+  .in(file("tests-jdk25"))
+  .settings(name := "lazyvalgrade-tests-jdk25")
+  .settings(commonTestSettings)
   .dependsOn(core, testops, agent)
 
 lazy val cli = project
@@ -71,7 +94,9 @@ lazy val cli = project
   .settings(
     name := "lazyvalgrade-cli",
     publish / skip := true,
-    scalaVersion := "3.8.1",
+    scalaVersion := "3.3.8",
+    // Keep the CLI loadable on Java 9 as well (matches core/agent bytecode target).
+    scalacOptions ++= Seq("-release", "9", "-Yfuture-lazy-vals"),
     libraryDependencies ++= Seq(
       "com.lihaoyi" %% "os-lib" % "0.11.3",
       "com.lihaoyi" %% "fansi" % "0.5.0",
@@ -93,7 +118,12 @@ lazy val agent = project
   .in(file("agent"))
   .settings(
     name := "lazyvalgrade-agent",
-    scalaVersion := "3.8.1",
+    scalaVersion := "3.3.8",
+    // Published artifact: target Java 9 bytecode so the agent loads on JVMs as old as Java 9
+    // (see core for rationale). -Yfuture-lazy-vals keeps the agent's own lazy vals Unsafe-free.
+    // The shaded scala/asm classes are already <= v53, so the whole assembled jar stays loadable
+    // on Java 9. Verified by ClassfileVersionTests in tests-jdk9.
+    scalacOptions ++= Seq("-release", "9", "-Yfuture-lazy-vals"),
     crossPaths := false,
     autoScalaLibrary := false,
     Compile / packageBin := assembly.value,
@@ -182,7 +212,7 @@ lazy val root = project
   .settings(
     name := "lazyvalgrade",
     publish / skip := true,
-    scalaVersion := "3.8.1",
+    scalaVersion := "3.3.8",
     agentInstall := {
       val assembled = (agent / assembly).value
       val target = Path.userHome / ".lazyvalgrade" / "agent.jar"
@@ -190,7 +220,21 @@ lazy val root = project
       IO.copyFile(assembled, target)
       streams.value.log.info(s"Installed agent to $target")
     },
+    // The test suites are split by JDK requirement and must run on different JVMs, so a single
+    // `sbt test` is meaningless (and would silently run JDK-24+ suites on whatever JVM is present).
+    // Refuse it and point at the two real targets.
+    Test / test := {
+      sys.error(
+        "`sbt test` is disabled for this build because tests are split by required JVM.\n" +
+          "  - `sbt tests-jdk9`  : bytecode-analysis + Java-9 runtime suites (run on a Java 9 JVM)\n" +
+          "  - `sbt tests-jdk25` : sun.misc.Unsafe warning suites (run on a Java 24+ JVM)"
+      )
+    },
     addCommandAlias("compileExamples", "testops/runMain lazyvalgrade.CompileExamplesMain"),
-    addCommandAlias("compileExamplesWithPatching", "testops/runMain lazyvalgrade.CompileExamplesMain --patch")
+    addCommandAlias("compileExamplesWithPatching", "testops/runMain lazyvalgrade.CompileExamplesMain --patch"),
+    addCommandAlias("tests-jdk9", "testsJdk9/test"),
+    addCommandAlias("tests-jdk25", "testsJdk25/test")
   )
-  .aggregate(core, testops, tests, cli, agent)
+  // Note: test modules are intentionally NOT aggregated, so `sbt test` only hits the root's
+  // disabled `Test / test` above rather than transitively running them on the wrong JVM.
+  .aggregate(core, testops, cli, agent)

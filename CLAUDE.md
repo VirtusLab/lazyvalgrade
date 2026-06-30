@@ -4,10 +4,13 @@ This document contains information for Claude Code (or other AI assistants) work
 
 ## Project Structure
 
-- **core/** - Core bytecode analysis and transformation logic
-- **cli/** - Command-line interface for running transformations
-- **tests/** - Test suite with fixtures and unit tests
-- **testops/** - Development tooling for debugging and testing
+- **core/** - Core bytecode analysis and transformation logic (published; `-release 9`)
+- **agent/** - Java agent that patches lazy vals at class-load time (published, shaded fat jar; `-release 9`)
+- **cli/** - Command-line interface for running transformations (`-release 9`)
+- **testops/** - Development tooling + shared test infra (`ExampleLoader`, `ExampleRunner`, `TestPaths`)
+- **tests/** - Test fixtures only (`src/test/resources/fixtures/examples/`); no sbt module
+- **tests-jdk9/** - Test suites that run on Java 9–11 (analysis + Java-9 runtime/classfile-version proof)
+- **tests-jdk25/** - Test suites that run on Java 24+ (sun.misc.Unsafe warning assertions)
 
 ## Development Tools
 
@@ -30,8 +33,8 @@ SELECT_EXAMPLE=simple-lazy-val,class-lazy-val sbt compileExamplesWithPatching
 
 # Or run the assembly directly
 sbt testops/assembly
-java -jar testops/target/scala-3.8.1/lazyvalgrade-testops.jar
-java -jar testops/target/scala-3.8.1/lazyvalgrade-testops.jar --patch
+java -jar testops/target/scala-3.3.8/lazyvalgrade-testops.jar
+java -jar testops/target/scala-3.3.8/lazyvalgrade-testops.jar --patch
 ```
 
 **What it does:**
@@ -99,14 +102,37 @@ find .out -name "*.javap.txt" | wc -l
 
 ## Testing
 
-**IMPORTANT: Never run `sbt test` directly.** The full test suite is extremely slow (compiles examples across 10+ Scala versions). Instead, always use `SELECT_EXAMPLE` and/or `ONLY_SCALA_VERSIONS` to narrow down tests. When you need to verify the full suite passes, ask the user to run it themselves.
+### Tests are split by required JVM — `sbt test` is disabled
+
+Scala 3.8 requires JDK 17 and can't emit bytecode below v61, so this build uses **Scala 3.3.8** (LTS,
+Java-8 stdlib) with `-Yfuture-lazy-vals` (keeps the Unsafe-free VarHandle lazy-val scheme) and
+`-release 9` on the published modules (`core`, `agent`, `cli`). Artifacts are therefore loadable on
+Java 9. The test suites are split into two sbt modules by the JVM they need, and a plain `sbt test`
+is intentionally disabled (it errors with a pointer to the two targets):
+
+- **`sbt tests-jdk9`** (module `tests-jdk9`, run on **Java 9–11**) — pure bytecode-analysis suites
+  (`LazyValDetectionTests`, `SemanticLazyValComparisonTests`, `AgentPatchingTests`), the Java-9
+  runtime proof (`Jdk9RuntimeTests` runs the agent + VarHandle-patched 3.3–3.7 code), and
+  `ClassfileVersionTests` (asserts the agent jar + core are ≤ v53). Locally there's no JDK 9; use
+  `JAVA_HOME=~/.sdkman/candidates/java/11.0.31-tem` (Java 11 is the oldest sbt-friendly proxy).
+- **`sbt tests-jdk25`** (module `tests-jdk25`, run on **Java 24+**) — `BytecodePatchingTests` and
+  `AgentIntegrationTests`, which assert presence/absence of the `sun.misc.Unsafe` warning that only
+  newer JDKs emit. Locally: `JAVA_HOME=~/.sdkman/candidates/java/25-graalce`.
+
+CI runs these as two jobs (`test-jdk9` on zulu 9, `test-jdk25` on temurin 25).
+
+**IMPORTANT: still narrow with `SELECT_EXAMPLE` / `ONLY_SCALA_VERSIONS`.** A full module run compiles
+examples across 10+ Scala versions and is very slow. To verify a full module passes, ask the user.
+
+The `sbt test` invocations in the filtering examples below are illustrative — substitute
+`tests-jdk9` or `tests-jdk25` (or `testsJdk9/testOnly ...`) for the suite you're targeting.
 
 ```bash
-# Run specific test suite with filtering (preferred)
-SELECT_EXAMPLE=simple-lazy-val sbt "tests/testOnly lazyvalgrade.LazyValDetectionTests"
+# Run a specific suite with filtering (preferred). Detection lives in tests-jdk9:
+SELECT_EXAMPLE=simple-lazy-val sbt "testsJdk9/testOnly lazyvalgrade.LazyValDetectionTests"
 
-# Run specific test
-sbt "tests/testOnly lazyvalgrade.LazyValDetectionTests -- *companion-object-lazy-val*"
+# A single example's runtime behaviour (warning suite) lives in tests-jdk25:
+SELECT_EXAMPLE=companion-object-lazy-val sbt "testsJdk25/testOnly lazyvalgrade.BytecodePatchingTests"
 ```
 
 ### Filtering Examples and Scala Versions
@@ -123,7 +149,7 @@ SELECT_EXAMPLE=simple-lazy-val sbt test
 SELECT_EXAMPLE=simple-lazy-val,class-lazy-val sbt test
 
 # Run specific test suite with filtering
-SELECT_EXAMPLE=companion-object-lazy-val sbt "tests/testOnly lazyvalgrade.BytecodePatchingTests"
+SELECT_EXAMPLE=companion-object-lazy-val sbt "testsJdk25/testOnly lazyvalgrade.BytecodePatchingTests"
 
 # Without SELECT_EXAMPLE, all examples are tested (default behavior)
 sbt test
@@ -139,7 +165,7 @@ ONLY_SCALA_VERSIONS=3.1.3,3.3.0 sbt test
 SELECT_EXAMPLE=simple-lazy-val ONLY_SCALA_VERSIONS=3.3.0,3.4.3 sbt test
 
 # Test a problematic version in isolation
-ONLY_SCALA_VERSIONS=3.3.0 sbt "tests/testOnly lazyvalgrade.LazyValDetectionTests"
+ONLY_SCALA_VERSIONS=3.3.0 sbt "testsJdk9/testOnly lazyvalgrade.LazyValDetectionTests"
 ```
 
 #### INSPECT_BYTECODE - Enable bytecode inspection on test failures
@@ -156,7 +182,7 @@ INSPECT_BYTECODE=true SELECT_EXAMPLE=multiple-lazy-vals ONLY_SCALA_VERSIONS=3.1.
 
 # Debug a specific test with full bytecode output
 INSPECT_BYTECODE=1 SELECT_EXAMPLE=simple-lazy-val ONLY_SCALA_VERSIONS=3.3.0 \
-  sbt "tests/testOnly lazyvalgrade.LazyValDetectionTests"
+  sbt "testsJdk9/testOnly lazyvalgrade.LazyValDetectionTests"
 ```
 
 **INSPECT_BYTECODE accepts:** `true`, `1`, `yes` (case insensitive)
@@ -184,11 +210,11 @@ sbt compile
 
 # Build CLI assembly
 sbt cli/assembly
-# Output: cli/target/scala-3.8.1/lazyvalgrade.jar
+# Output: cli/target/scala-3.3.8/lazyvalgrade.jar
 
 # Build testops assembly
 sbt testops/assembly
-# Output: testops/target/scala-3.8.1/lazyvalgrade-testops.jar
+# Output: testops/target/scala-3.3.8/lazyvalgrade-testops.jar
 ```
 
 ## Important Notes

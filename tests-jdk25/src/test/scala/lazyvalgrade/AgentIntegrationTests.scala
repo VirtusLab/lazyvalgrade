@@ -46,8 +46,7 @@ class AgentIntegrationTests extends FunSuite {
     }
 
     // Agent jar is built automatically by sbt (Test/test dependsOn agent/assembly)
-    agentJarPath = os.pwd / "agent" / "target" / "scala-3.8.1" / "lazyvalgrade-agent.jar"
-    assert(os.exists(agentJarPath), s"Agent jar not found: $agentJarPath (should be built by sbt automatically)")
+    agentJarPath = TestPaths.findAgentJar()
 
     // Write test source and compile with scala-cli
     tempDir = os.temp.dir(prefix = "lazyvalgrade-agent-integ-", deleteOnExit = false)

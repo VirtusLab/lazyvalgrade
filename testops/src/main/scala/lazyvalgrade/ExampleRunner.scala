@@ -89,9 +89,14 @@ class ExampleRunner(
       info(s"Compiling with Scala $scalaVersion...")
     }
 
-    // Run scala-cli compile with JDK 17 (for compatibility with older Scala versions)
+    // Run scala-cli compile on JDK 17 (the compiler runtime — needed by both old and new Scala
+    // versions). Target Java 9 bytecode (--release 9) so fixtures load on a Java 9 JVM, which the
+    // tests-jdk9 runtime suite requires. This only lowers the classfile version; the lazy-val
+    // scheme (bitmap / Unsafe) is unchanged. Scala 3.8.x cannot emit < v61, so it keeps its
+    // default target and is therefore only run on the JDK-25 leg (used as a static reference here).
+    val releaseArgs = if (scalaVersion.startsWith("3.8")) Seq.empty else Seq("--release", "9")
     val result = os
-      .proc("scala-cli", "compile", "--jvm", "17", "-S", scalaVersion, targetDir.toString)
+      .proc("scala-cli", "compile", "--jvm", "17", releaseArgs, "-S", scalaVersion, targetDir.toString)
       .call(cwd = targetDir, stderr = os.Pipe, stdout = os.Pipe, check = false)
 
     // Only log output if compilation failed or not in quiet mode
