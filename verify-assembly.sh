@@ -16,7 +16,7 @@ if [[ "${1:-}" == "-v" ]]; then
     VERBOSE=true
 fi
 
-echo -e "${BOLD}LazyValGrade Assembly Verification Script${NC}"
+echo -e "${BOLD}Sloth Assembly Verification Script${NC}"
 if [ "$VERBOSE" = false ]; then
     echo -e "${YELLOW}(Run with -v flag to see detailed javap bytecode output)${NC}"
 fi
@@ -24,7 +24,7 @@ echo ""
 
 # Get the project root directory
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ASSEMBLY_JAR="${PROJECT_ROOT}/cli/target/scala-3.8.1/lazyvalgrade.jar"
+ASSEMBLY_JAR="${PROJECT_ROOT}/cli/target/scala-3.8.1/sloth.jar"
 
 # Check if assembly jar exists
 if [ ! -f "$ASSEMBLY_JAR" ]; then
@@ -37,7 +37,7 @@ echo -e "${GREEN}✓ Found assembly jar: $ASSEMBLY_JAR${NC}"
 echo ""
 
 # Create temporary test directory
-TEST_DIR=$(mktemp -d -t lazyvalgrade-verify-XXXXXX)
+TEST_DIR=$(mktemp -d -t sloth-verify-XXXXXX)
 echo -e "${BLUE}Created test directory: $TEST_DIR${NC}"
 
 # Cleanup function

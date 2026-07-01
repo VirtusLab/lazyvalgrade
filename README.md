@@ -80,7 +80,7 @@ The fastest way to test whether your Scala 3 project works on JDK 26+ is the jav
 sbt agentInstall
 ```
 
-This places the agent JAR at `~/.lazyvalgrade/agent.jar`.
+This places the agent JAR at `~/.sloth/agent.jar`.
 
 ### Wrapper Scripts
 
@@ -111,7 +111,7 @@ scn repl .
 For any JVM tool, set `JAVA_TOOL_OPTIONS` to inject the agent globally:
 
 ```bash
-export JAVA_TOOL_OPTIONS="-javaagent:$HOME/.lazyvalgrade/agent.jar"
+export JAVA_TOOL_OPTIONS="-javaagent:$HOME/.sloth/agent.jar"
 ```
 
 This covers any JVM process launched in that shell -- sbt, scala-cli, Mill, Gradle, plain `java`, etc. The agent automatically detects and patches Scala 3.0-3.7.x lazy val bytecode at class-load time.
@@ -119,7 +119,7 @@ This covers any JVM process launched in that shell -- sbt, scala-cli, Mill, Grad
 For a single invocation without environment variables:
 
 ```bash
-java -javaagent:$HOME/.lazyvalgrade/agent.jar -jar your-app.jar
+java -javaagent:$HOME/.sloth/agent.jar -jar your-app.jar
 ```
 
 ### Agent Options
@@ -127,7 +127,7 @@ java -javaagent:$HOME/.lazyvalgrade/agent.jar -jar your-app.jar
 Options are passed after `=` in the `-javaagent:` argument (comma-separated):
 
 ```bash
-java -javaagent:$HOME/.lazyvalgrade/agent.jar=verbose -jar your-app.jar
+java -javaagent:$HOME/.sloth/agent.jar=verbose -jar your-app.jar
 ```
 
 - `verbose` -- log patched classes to stderr (Debug level)
@@ -144,7 +144,7 @@ java -javaagent:$HOME/.lazyvalgrade/agent.jar=verbose -jar your-app.jar
 sbt cli/assembly
 
 # Patch all classfiles in a directory (in-place)
-java -jar cli/target/scala-3.8.1/lazyvalgrade.jar <directory>
+java -jar cli/target/scala-3.8.1/sloth.jar <directory>
 ```
 
 The CLI recursively finds all `.class` files in the given directory, detects Scala 3.0-3.7.x lazy val implementations, and rewrites them to the 3.8+ VarHandle-based format. Use this for producing patched artifacts in build pipelines (assembly JARs, Docker images, etc.).
@@ -156,7 +156,7 @@ The CLI recursively finds all `.class` files in the given directory, detects Sca
 sbt agentInstall
 
 # Run any JVM application with the agent
-java -javaagent:$HOME/.lazyvalgrade/agent.jar -jar your-app.jar
+java -javaagent:$HOME/.sloth/agent.jar -jar your-app.jar
 ```
 
 The agent intercepts class loading, detects Scala 3.0-3.7.x lazy val bytecode, and rewrites it to the 3.8+ format before the class is loaded. No changes to application code or build required.

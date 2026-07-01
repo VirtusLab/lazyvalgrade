@@ -1,6 +1,6 @@
 # Claude Code Development Guide
 
-This document contains information for Claude Code (or other AI assistants) working on the lazyvalgrade project.
+This document contains information for Claude Code (or other AI assistants) working on the sloth project.
 
 ## Project Structure
 
@@ -33,8 +33,8 @@ SELECT_EXAMPLE=simple-lazy-val,class-lazy-val sbt compileExamplesWithPatching
 
 # Or run the assembly directly
 sbt testops/assembly
-java -jar testops/target/scala-3.3.8/lazyvalgrade-testops.jar
-java -jar testops/target/scala-3.3.8/lazyvalgrade-testops.jar --patch
+java -jar testops/target/scala-3.3.8/sloth-testops.jar
+java -jar testops/target/scala-3.3.8/sloth-testops.jar --patch
 ```
 
 **What it does:**
@@ -132,10 +132,10 @@ The `sbt test` invocations in the filtering examples below are illustrative — 
 
 ```bash
 # Run a specific suite with filtering (preferred). Detection lives in tests-jdk9:
-SELECT_EXAMPLE=simple-lazy-val sbt "testsJdk9/testOnly lazyvalgrade.LazyValDetectionTests"
+SELECT_EXAMPLE=simple-lazy-val sbt "testsJdk9/testOnly sloth.LazyValDetectionTests"
 
 # A single example's runtime behaviour (warning suite) lives in tests-jdk25:
-SELECT_EXAMPLE=companion-object-lazy-val sbt "testsJdk25/testOnly lazyvalgrade.BytecodePatchingTests"
+SELECT_EXAMPLE=companion-object-lazy-val sbt "testsJdk25/testOnly sloth.BytecodePatchingTests"
 ```
 
 ### Filtering Examples and Scala Versions
@@ -152,7 +152,7 @@ SELECT_EXAMPLE=simple-lazy-val sbt test
 SELECT_EXAMPLE=simple-lazy-val,class-lazy-val sbt test
 
 # Run specific test suite with filtering
-SELECT_EXAMPLE=companion-object-lazy-val sbt "testsJdk25/testOnly lazyvalgrade.BytecodePatchingTests"
+SELECT_EXAMPLE=companion-object-lazy-val sbt "testsJdk25/testOnly sloth.BytecodePatchingTests"
 
 # Without SELECT_EXAMPLE, all examples are tested (default behavior)
 sbt test
@@ -168,7 +168,7 @@ ONLY_SCALA_VERSIONS=3.1.3,3.3.0 sbt test
 SELECT_EXAMPLE=simple-lazy-val ONLY_SCALA_VERSIONS=3.3.0,3.4.3 sbt test
 
 # Test a problematic version in isolation
-ONLY_SCALA_VERSIONS=3.3.0 sbt "testsJdk9/testOnly lazyvalgrade.LazyValDetectionTests"
+ONLY_SCALA_VERSIONS=3.3.0 sbt "testsJdk9/testOnly sloth.LazyValDetectionTests"
 ```
 
 #### INSPECT_BYTECODE - Enable bytecode inspection on test failures
@@ -185,7 +185,7 @@ INSPECT_BYTECODE=true SELECT_EXAMPLE=multiple-lazy-vals ONLY_SCALA_VERSIONS=3.1.
 
 # Debug a specific test with full bytecode output
 INSPECT_BYTECODE=1 SELECT_EXAMPLE=simple-lazy-val ONLY_SCALA_VERSIONS=3.3.0 \
-  sbt "testsJdk9/testOnly lazyvalgrade.LazyValDetectionTests"
+  sbt "testsJdk9/testOnly sloth.LazyValDetectionTests"
 ```
 
 **INSPECT_BYTECODE accepts:** `true`, `1`, `yes` (case insensitive)
@@ -213,11 +213,11 @@ sbt compile
 
 # Build CLI assembly
 sbt cli/assembly
-# Output: cli/target/scala-3.3.8/lazyvalgrade.jar
+# Output: cli/target/scala-3.3.8/sloth.jar
 
 # Build testops assembly
 sbt testops/assembly
-# Output: testops/target/scala-3.3.8/lazyvalgrade-testops.jar
+# Output: testops/target/scala-3.3.8/sloth-testops.jar
 ```
 
 ## Important Notes

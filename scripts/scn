@@ -2,16 +2,16 @@
 set -euo pipefail
 
 # scn — scala-cli-next
-# Runs scala-cli from a fat JAR (not native image) with the lazyvalgrade
+# Runs scala-cli from a fat JAR (not native image) with the sloth
 # Java agent injected into both the scala-cli JVM and the forked user JVM.
 
 SCALA_CLI_VERSION="${SCALA_CLI_VERSION:-1.12.1}"
-LAZYVALGRADE_AGENT="${LAZYVALGRADE_AGENT:-$HOME/.lazyvalgrade/agent.jar}"
+SLOTH_AGENT="${SLOTH_AGENT:-$HOME/.sloth/agent.jar}"
 
-if [[ ! -f "$LAZYVALGRADE_AGENT" ]]; then
-  echo "scn: agent jar not found: $LAZYVALGRADE_AGENT" >&2
+if [[ ! -f "$SLOTH_AGENT" ]]; then
+  echo "scn: agent jar not found: $SLOTH_AGENT" >&2
   echo "  Install it with: sbt agentInstall" >&2
-  echo "  Or set LAZYVALGRADE_AGENT to the correct path" >&2
+  echo "  Or set SLOTH_AGENT to the correct path" >&2
   exit 1
 fi
 
@@ -23,10 +23,10 @@ if [[ -z "$SCALA_CLI_JAR" ]]; then
   exit 1
 fi
 
-export JAVA_TOOL_OPTIONS="-javaagent:$LAZYVALGRADE_AGENT"
+export JAVA_TOOL_OPTIONS="-javaagent:$SLOTH_AGENT"
 
 exec java \
-  "-javaagent:$LAZYVALGRADE_AGENT" \
+  "-javaagent:$SLOTH_AGENT" \
   -cp "$SCALA_CLI_JAR" \
   scala.cli.ScalaCli \
   "$@"

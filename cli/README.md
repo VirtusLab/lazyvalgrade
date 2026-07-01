@@ -1,4 +1,4 @@
-# LazyValGrade CLI
+# Sloth CLI
 
 Command-line tool for patching Scala 3.x lazy val bytecode to Scala 3.8+ format.
 
@@ -14,12 +14,12 @@ Build the assembly jar (fat jar with all dependencies):
 sbt cli/assembly
 ```
 
-The jar will be created at: `cli/target/scala-3.8.1/lazyvalgrade.jar`
+The jar will be created at: `cli/target/scala-3.8.1/sloth.jar`
 
 ## Usage
 
 ```bash
-java -jar lazyvalgrade.jar <directory>
+java -jar sloth.jar <directory>
 ```
 
 The tool will:
@@ -36,7 +36,7 @@ The tool will:
 sbt cli/assembly
 
 # Patch all classfiles in a directory
-java -jar cli/target/scala-3.8.1/lazyvalgrade.jar /path/to/classes
+java -jar cli/target/scala-3.8.1/sloth.jar /path/to/classes
 ```
 
 ## Output
@@ -96,7 +96,7 @@ The transformation:
 ## Dependencies
 
 The assembly includes:
-- lazyvalgrade-core (bytecode parsing and patching)
+- sloth-core (bytecode parsing and patching)
 - os-lib (file operations)
 - fansi (colored console output)
 - scribe (logging)

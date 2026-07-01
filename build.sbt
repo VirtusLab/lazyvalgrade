@@ -1,6 +1,6 @@
 inThisBuild(List(
   organization := "org.virtuslab",
-  homepage := Some(url("https://github.com/VirtusLab/lazyvalgrade")),
+  homepage := Some(url("https://github.com/VirtusLab/sloth")),
   licenses := List("Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0")),
   developers := List(
     Developer(
@@ -15,7 +15,7 @@ inThisBuild(List(
 lazy val core = project
   .in(file("core"))
   .settings(
-    name := "lazyvalgrade-core",
+    name := "sloth-core",
     // Scala 3.3 LTS (not 3.8): 3.8's compiler/stdlib require JDK 17 and cannot emit < v61 bytecode,
     // so artifacts built with it can't load on Java 9. 3.3.8's stdlib targets Java 8 and runs on 9.
     scalaVersion := "3.3.8",
@@ -38,7 +38,7 @@ lazy val core = project
 lazy val testops = project
   .in(file("testops"))
   .settings(
-    name := "lazyvalgrade-testops",
+    name := "sloth-testops",
     publish / skip := true,
     scalaVersion := "3.3.8",
     libraryDependencies ++= Seq(
@@ -47,9 +47,9 @@ lazy val testops = project
       "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-core" % "2.32.0",
       "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-macros" % "2.32.0" % Provided
     ),
-    Compile / mainClass := Some("lazyvalgrade.CompileExamplesMain"),
-    assembly / mainClass := Some("lazyvalgrade.CompileExamplesMain"),
-    assembly / assemblyJarName := "lazyvalgrade-testops.jar",
+    Compile / mainClass := Some("sloth.CompileExamplesMain"),
+    assembly / mainClass := Some("sloth.CompileExamplesMain"),
+    assembly / assemblyJarName := "sloth-testops.jar",
     assembly / assemblyMergeStrategy := {
       case PathList("META-INF", xs @ _*) => MergeStrategy.discard
       case x => MergeStrategy.first
@@ -79,20 +79,20 @@ val commonTestSettings = Seq(
 
 lazy val testsJdk9 = project
   .in(file("tests-jdk9"))
-  .settings(name := "lazyvalgrade-tests-jdk9")
+  .settings(name := "sloth-tests-jdk9")
   .settings(commonTestSettings)
   .dependsOn(core, testops, agent)
 
 lazy val testsJdk25 = project
   .in(file("tests-jdk25"))
-  .settings(name := "lazyvalgrade-tests-jdk25")
+  .settings(name := "sloth-tests-jdk25")
   .settings(commonTestSettings)
   .dependsOn(core, testops, agent)
 
 lazy val cli = project
   .in(file("cli"))
   .settings(
-    name := "lazyvalgrade-cli",
+    name := "sloth-cli",
     publish / skip := true,
     scalaVersion := "3.3.8",
     // Keep the CLI loadable on Java 9 as well (matches core/agent bytecode target).
@@ -102,9 +102,9 @@ lazy val cli = project
       "com.lihaoyi" %% "fansi" % "0.5.0",
       "com.outr" %% "scribe" % "3.15.0"
     ),
-    Compile / mainClass := Some("lazyvalgrade.cli.Main"),
-    assembly / mainClass := Some("lazyvalgrade.cli.Main"),
-    assembly / assemblyJarName := "lazyvalgrade.jar",
+    Compile / mainClass := Some("sloth.cli.Main"),
+    assembly / mainClass := Some("sloth.cli.Main"),
+    assembly / assemblyJarName := "sloth.jar",
     assembly / assemblyMergeStrategy := {
       case PathList("META-INF", xs @ _*) => MergeStrategy.discard
       case x => MergeStrategy.first
@@ -117,7 +117,7 @@ lazy val processDeps = taskKey[Classpath]("Process agent dependency JARs to patc
 lazy val agent = project
   .in(file("agent"))
   .settings(
-    name := "lazyvalgrade-agent",
+    name := "sloth-agent",
     scalaVersion := "3.3.8",
     // Published artifact: target Java 9 bytecode so the agent loads on JVMs as old as Java 9
     // (see core for rationale). -Yfuture-lazy-vals keeps the agent's own lazy vals Unsafe-free.
@@ -161,7 +161,7 @@ lazy val agent = project
         IO.copyFile(depJar, dest)
         if (debugAssembly) log.info(s"Processing ${depJar.getName}...")
         val exitCode = scala.sys.process.Process(
-          Seq("java", "-cp", fullCp, "lazyvalgrade.cli.Main", dest.getAbsolutePath)
+          Seq("java", "-cp", fullCp, "sloth.cli.Main", dest.getAbsolutePath)
         ).!(processLogger)
         if (exitCode != 0) {
           throw new MessageOnlyException(s"Failed to process ${depJar.getName} (exit code $exitCode)")
@@ -179,43 +179,43 @@ lazy val agent = project
       val nonJarDeps = deps.filterNot(_.data.getName.endsWith(".jar"))
       ownProducts ++ nonJarDeps ++ processed
     },
-    assembly / assemblyJarName := "lazyvalgrade-agent.jar",
+    assembly / assemblyJarName := "sloth-agent.jar",
     assembly / assemblyMergeStrategy := {
       case PathList("META-INF", "MANIFEST.MF") => MergeStrategy.discard
       case PathList("META-INF", xs @ _*) => MergeStrategy.discard
       case x => MergeStrategy.first
     },
     assembly / assemblyShadeRules := Seq(
-      ShadeRule.rename("lazyvalgrade.**" -> "lazyvalgrade.shaded.agent.@0").inAll,
-      ShadeRule.rename("scala.**" -> "lazyvalgrade.shaded.scala.@1").inAll,
-      ShadeRule.rename("org.objectweb.asm.**" -> "lazyvalgrade.shaded.asm.@1").inAll,
-      ShadeRule.rename("scribe.**" -> "lazyvalgrade.shaded.scribe.@1").inAll,
-      ShadeRule.rename("perfolation.**" -> "lazyvalgrade.shaded.perfolation.@1").inAll,
-      ShadeRule.rename("moduload.**" -> "lazyvalgrade.shaded.moduload.@1").inAll,
-      ShadeRule.rename("sourcecode.**" -> "lazyvalgrade.shaded.sourcecode.@1").inAll,
-      ShadeRule.rename("com.lihaoyi.**" -> "lazyvalgrade.shaded.lihaoyi.@1").inAll,
-      ShadeRule.rename("os.**" -> "lazyvalgrade.shaded.os.@1").inAll,
-      ShadeRule.rename("geny.**" -> "lazyvalgrade.shaded.geny.@1").inAll
+      ShadeRule.rename("sloth.**" -> "sloth.shaded.agent.@0").inAll,
+      ShadeRule.rename("scala.**" -> "sloth.shaded.scala.@1").inAll,
+      ShadeRule.rename("org.objectweb.asm.**" -> "sloth.shaded.asm.@1").inAll,
+      ShadeRule.rename("scribe.**" -> "sloth.shaded.scribe.@1").inAll,
+      ShadeRule.rename("perfolation.**" -> "sloth.shaded.perfolation.@1").inAll,
+      ShadeRule.rename("moduload.**" -> "sloth.shaded.moduload.@1").inAll,
+      ShadeRule.rename("sourcecode.**" -> "sloth.shaded.sourcecode.@1").inAll,
+      ShadeRule.rename("com.lihaoyi.**" -> "sloth.shaded.lihaoyi.@1").inAll,
+      ShadeRule.rename("os.**" -> "sloth.shaded.os.@1").inAll,
+      ShadeRule.rename("geny.**" -> "sloth.shaded.geny.@1").inAll
     ),
     assembly / packageOptions += Package.ManifestAttributes(
-      "Premain-Class" -> "lazyvalgrade.shaded.agent.lazyvalgrade.agent.LazyValGradeAgent",
+      "Premain-Class" -> "sloth.shaded.agent.sloth.agent.SlothAgent",
       "Can-Retransform-Classes" -> "false",
       "Can-Redefine-Classes" -> "false"
     )
   )
   .dependsOn(core)
 
-lazy val agentInstall = taskKey[Unit]("Build agent assembly and install to ~/.lazyvalgrade/agent.jar")
+lazy val agentInstall = taskKey[Unit]("Build agent assembly and install to ~/.sloth/agent.jar")
 
 lazy val root = project
   .in(file("."))
   .settings(
-    name := "lazyvalgrade",
+    name := "sloth",
     publish / skip := true,
     scalaVersion := "3.3.8",
     agentInstall := {
       val assembled = (agent / assembly).value
-      val target = Path.userHome / ".lazyvalgrade" / "agent.jar"
+      val target = Path.userHome / ".sloth" / "agent.jar"
       IO.createDirectory(target.getParentFile)
       IO.copyFile(assembled, target)
       streams.value.log.info(s"Installed agent to $target")
@@ -230,8 +230,8 @@ lazy val root = project
           "  - `sbt tests-jdk25` : sun.misc.Unsafe warning suites (run on a Java 24+ JVM)"
       )
     },
-    addCommandAlias("compileExamples", "testops/runMain lazyvalgrade.CompileExamplesMain"),
-    addCommandAlias("compileExamplesWithPatching", "testops/runMain lazyvalgrade.CompileExamplesMain --patch"),
+    addCommandAlias("compileExamples", "testops/runMain sloth.CompileExamplesMain"),
+    addCommandAlias("compileExamplesWithPatching", "testops/runMain sloth.CompileExamplesMain --patch"),
     addCommandAlias("tests-jdk9", "testsJdk9/test"),
     addCommandAlias("tests-jdk25", "testsJdk25/test")
   )

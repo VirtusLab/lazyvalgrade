@@ -45,8 +45,8 @@ This comparison ignores all bytecode differences except lazy val implementation 
 ## Usage
 
 ```scala
-import lazyvalgrade.classfile.{ClassfileParser, ClassInfo}
-import lazyvalgrade.lazyval.{SemanticLazyValComparator, LazyValFormatter}
+import sloth.classfile.{ClassfileParser, ClassInfo}
+import sloth.lazyval.{SemanticLazyValComparator, LazyValFormatter}
 
 // Parse two classfiles (same source, different Scala versions)
 val bytes1: Array[Byte] = ??? // From Scala 3.3
