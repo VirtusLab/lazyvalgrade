@@ -22,16 +22,18 @@ import sloth.patching.BytecodePatcher
   */
 object BloopWarmup {
   // First access boots the daemon; concurrent accessors block on lazy-val init until it's ready.
+  // Skipped on CI where --server=false disables Bloop entirely.
   private lazy val booted: Unit = {
-    val dir = os.temp.dir(prefix = "sloth-bloop-warmup-")
-    os.write.over(dir / "Warmup.scala", "object Warmup\n")
-    // Generous startup timeout so a cold daemon (JVM download + start) doesn't trip the 30s default.
-    os.proc("scala-cli", "compile", "--jvm", "17", "--bloop-startup-timeout", "180s", "-S", "3.3.8", dir.toString)
-      .call(check = false, stderr = os.Pipe, stdout = os.Pipe)
-    os.remove.all(dir)
+    if (!TestPaths.isCI) {
+      val dir = os.temp.dir(prefix = "sloth-bloop-warmup-")
+      os.write.over(dir / "Warmup.scala", "object Warmup\n")
+      os.proc("scala-cli", "compile", "--jvm", "17", "--bloop-startup-timeout", "180s", "-S", "3.3.8", dir.toString)
+        .call(check = false, stderr = os.Pipe, stdout = os.Pipe)
+      os.remove.all(dir)
+    }
   }
 
-  /** Ensure the Bloop daemon is running before launching parallel compilations. Idempotent. */
+  /** Ensure the Bloop daemon is running before launching parallel compilations. Idempotent. No-op on CI. */
   def ensure(): Unit = booted
 }
 
@@ -121,7 +123,7 @@ class ExampleRunner(
     // default target and is therefore only run on the JDK-25 leg (used as a static reference here).
     val releaseArgs = if (scalaVersion.startsWith("3.8")) Seq.empty else Seq("--release", "9")
     val result = os
-      .proc("scala-cli", "compile", "--jvm", "17", "--bloop-startup-timeout", "180s", releaseArgs, "-S", scalaVersion, targetDir.toString)
+      .proc("scala-cli", "compile", "--jvm", "17", TestPaths.scalaCliServerArgs, releaseArgs, "-S", scalaVersion, targetDir.toString)
       .call(cwd = targetDir, stderr = os.Pipe, stdout = os.Pipe, check = false)
 
     // Only log output if compilation failed or not in quiet mode
